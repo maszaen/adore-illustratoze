@@ -1,0 +1,675 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   ADORE ILLUSTRATOZE - 100% ADOBE ILLUSTRATOR CC (SPECTRUM PRO) THEME SYSTEM
+   Supports 4 UI Brightness Themes:
+   - dark         (#323232 panel, #262626 header/toolbar, #1e1e1e pasteboard)
+   - medium-dark  (#535353 panel, #424242 header/toolbar, #383838 pasteboard)
+   - medium-light (#b8b8b8 panel, #a3a3a3 header/toolbar, #8c8c8c pasteboard)
+   - light        (#f0f0f0 panel, #dcdcdc header/toolbar, #c8c8c8 pasteboard)
+   ============================================================================ */
+
+:root,
+[data-ui-theme='dark'],
+[data-theme='dark'] {
+  --ai-bg-app: #1e1e1e;
+  --ai-bg-pasteboard: #1e1e1e;
+  --ai-bg-header: #262626;
+  --ai-bg-toolbar: #262626;
+  --ai-bg-controlbar: #2c2c2c;
+  --ai-bg-panel: #323232;
+  --ai-bg-panel-header: #292929;
+  --ai-bg-panel-tab-inactive: #222222;
+  --ai-bg-panel-tab-active: #323232;
+  --ai-bg-elevated: #383838;
+  --ai-bg-input: #3f3f3f;
+  --ai-bg-input-focus: #222222;
+  --ai-bg-hover: #424242;
+  --ai-bg-active: #1d1d1d;
+  --ai-bg-selected: #1473e6;
+  --ai-bg-selected-subtle: rgba(20, 115, 230, 0.22);
+  --ai-bg-menu: #2a2a2a;
+  --ai-bg-statusbar: #262626;
+
+  --ai-border-strong: #1a1a1a;
+  --ai-border-subtle: #3d3d3d;
+  --ai-border-input: #4a4a4a;
+  --ai-border-focus: #1473e6;
+  --ai-divider: #222222;
+
+  --ai-text-primary: #e8e8e8;
+  --ai-text-secondary: #9e9e9e;
+  --ai-text-muted: #6e6e6e;
+  --ai-text-inverse: #ffffff;
+
+  --ai-accent-blue: #1473e6;
+  --ai-accent-blue-hover: #0d66d0;
+  --ai-brand-bg: #330000;
+  --ai-brand-fg: #ff9a00;
+  --ai-guide-cyan: #00ffff;
+  --ai-smart-magenta: #ff00ff;
+  --ai-smart-green: #00ff66;
+  --ai-bleed-red: #ff0000;
+  --ai-warning-amber: #f5a623;
+  --ai-danger-red: #e34850;
+
+  --ai-shadow-floating: 0 8px 28px rgba(0, 0, 0, 0.65), 0 1px 3px rgba(0, 0, 0, 0.5);
+  --ai-shadow-menu: 0 6px 20px rgba(0, 0, 0, 0.6);
+  --ai-scrollbar-thumb: #4f4f4f;
+  --ai-scrollbar-thumb-hover: #686868;
+  --ai-scrollbar-track: #262626;
+}
+
+[data-ui-theme='medium-dark'],
+[data-theme='medium-dark'] {
+  --ai-bg-app: #383838;
+  --ai-bg-pasteboard: #383838;
+  --ai-bg-header: #424242;
+  --ai-bg-toolbar: #424242;
+  --ai-bg-controlbar: #4a4a4a;
+  --ai-bg-panel: #535353;
+  --ai-bg-panel-header: #464646;
+  --ai-bg-panel-tab-inactive: #3d3d3d;
+  --ai-bg-panel-tab-active: #535353;
+  --ai-bg-elevated: #5c5c5c;
+  --ai-bg-input: #454545;
+  --ai-bg-input-focus: #333333;
+  --ai-bg-hover: #616161;
+  --ai-bg-active: #383838;
+  --ai-bg-selected: #1473e6;
+  --ai-bg-selected-subtle: rgba(20, 115, 230, 0.26);
+  --ai-bg-menu: #454545;
+  --ai-bg-statusbar: #424242;
+
+  --ai-border-strong: #2b2b2b;
+  --ai-border-subtle: #636363;
+  --ai-border-input: #686868;
+  --ai-border-focus: #2680eb;
+  --ai-divider: #3b3b3b;
+
+  --ai-text-primary: #f0f0f0;
+  --ai-text-secondary: #c4c4c4;
+  --ai-text-muted: #909090;
+  --ai-text-inverse: #ffffff;
+
+  --ai-scrollbar-thumb: #6e6e6e;
+  --ai-scrollbar-thumb-hover: #858585;
+  --ai-scrollbar-track: #424242;
+}
+
+[data-ui-theme='medium-light'],
+[data-theme='medium-light'] {
+  --ai-bg-app: #8c8c8c;
+  --ai-bg-pasteboard: #8c8c8c;
+  --ai-bg-header: #a3a3a3;
+  --ai-bg-toolbar: #a3a3a3;
+  --ai-bg-controlbar: #adadad;
+  --ai-bg-panel: #b8b8b8;
+  --ai-bg-panel-header: #a8a8a8;
+  --ai-bg-panel-tab-inactive: #999999;
+  --ai-bg-panel-tab-active: #b8b8b8;
+  --ai-bg-elevated: #c4c4c4;
+  --ai-bg-input: #d4d4d4;
+  --ai-bg-input-focus: #ffffff;
+  --ai-bg-hover: #c7c7c7;
+  --ai-bg-active: #949494;
+  --ai-bg-selected: #1473e6;
+  --ai-bg-selected-subtle: rgba(20, 115, 230, 0.2);
+  --ai-bg-menu: #c4c4c4;
+  --ai-bg-statusbar: #a3a3a3;
+
+  --ai-border-strong: #737373;
+  --ai-border-subtle: #9e9e9e;
+  --ai-border-input: #8f8f8f;
+  --ai-border-focus: #0d66d0;
+  --ai-divider: #888888;
+
+  --ai-text-primary: #1c1c1c;
+  --ai-text-secondary: #3d3d3d;
+  --ai-text-muted: #5c5c5c;
+  --ai-text-inverse: #ffffff;
+
+  --ai-shadow-floating: 0 8px 24px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.25);
+  --ai-shadow-menu: 0 6px 18px rgba(0, 0, 0, 0.3);
+  --ai-scrollbar-thumb: #888888;
+  --ai-scrollbar-thumb-hover: #6e6e6e;
+  --ai-scrollbar-track: #a6a6a6;
+}
+
+[data-ui-theme='light'],
+[data-theme='light'] {
+  --ai-bg-app: #c8c8c8;
+  --ai-bg-pasteboard: #c8c8c8;
+  --ai-bg-header: #dcdcdc;
+  --ai-bg-toolbar: #dcdcdc;
+  --ai-bg-controlbar: #e6e6e6;
+  --ai-bg-panel: #f0f0f0;
+  --ai-bg-panel-header: #e2e2e2;
+  --ai-bg-panel-tab-inactive: #d2d2d2;
+  --ai-bg-panel-tab-active: #f0f0f0;
+  --ai-bg-elevated: #f8f8f8;
+  --ai-bg-input: #ffffff;
+  --ai-bg-input-focus: #ffffff;
+  --ai-bg-hover: #e0e0e0;
+  --ai-bg-active: #cccccc;
+  --ai-bg-selected: #1473e6;
+  --ai-bg-selected-subtle: rgba(20, 115, 230, 0.16);
+  --ai-bg-menu: #f7f7f7;
+  --ai-bg-statusbar: #dcdcdc;
+
+  --ai-border-strong: #b0b0b0;
+  --ai-border-subtle: #d4d4d4;
+  --ai-border-input: #bcbcbc;
+  --ai-border-focus: #1473e6;
+  --ai-divider: #c4c4c4;
+
+  --ai-text-primary: #1a1a1a;
+  --ai-text-secondary: #525252;
+  --ai-text-muted: #7a7a7a;
+  --ai-text-inverse: #ffffff;
+
+  --ai-shadow-floating: 0 8px 24px rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.15);
+  --ai-shadow-menu: 0 6px 16px rgba(0, 0, 0, 0.2);
+  --ai-scrollbar-thumb: #b5b5b5;
+  --ai-scrollbar-thumb-hover: #969696;
+  --ai-scrollbar-track: #e0e0e0;
+}
+
+[data-pasteboard='white'] {
+  --ai-bg-pasteboard: #ffffff;
+}
+
+/* ============================================================================
+   GLOBAL RESET & HIGH-DENSITY DESKTOP TYPOGRAPHY
+   ============================================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: var(--ai-bg-app);
+  color: var(--ai-text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-size: 11px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+input,
+select,
+button,
+textarea {
+  font-family: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+}
+
+/* ============================================================================
+   CUSTOM SCROLLBARS
+   ============================================================================ */
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ai-scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ai-scrollbar-thumb);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ai-scrollbar-thumb-hover);
+}
+
+/* ============================================================================
+   AI BRAND BADGE & TOP MENU BAR
+   ============================================================================ */
+
+.ai-brand-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background-color: var(--ai-brand-bg);
+  color: var(--ai-brand-fg);
+  border: 1px solid rgba(255, 154, 0, 0.45);
+  border-radius: 3px;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: -0.4px;
+  flex-shrink: 0;
+}
+
+.ai-menubar {
+  height: 28px;
+  background-color: var(--ai-bg-header);
+  border-bottom: 1px solid var(--ai-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  z-index: 200;
+}
+
+.ai-menu-trigger {
+  height: 22px;
+  padding: 0 7px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--ai-text-primary);
+  font-size: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ai-menu-trigger:hover,
+.ai-menu-trigger.active {
+  background-color: var(--ai-bg-hover);
+}
+
+.ai-dropdown-menu {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  min-width: 228px;
+  background-color: var(--ai-bg-menu);
+  border: 1px solid var(--ai-border-strong);
+  box-shadow: var(--ai-shadow-menu);
+  border-radius: 2px;
+  padding: 3px 0;
+  z-index: 1000;
+}
+
+.ai-dropdown-item {
+  width: 100%;
+  height: 23px;
+  padding: 0 10px 0 22px;
+  background: transparent;
+  border: none;
+  color: var(--ai-text-primary);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  position: relative;
+  text-align: left;
+}
+
+.ai-dropdown-item:hover:not(:disabled) {
+  background-color: var(--ai-accent-blue);
+  color: var(--ai-text-inverse);
+}
+
+.ai-dropdown-item:disabled {
+  color: var(--ai-text-muted);
+  cursor: default;
+}
+
+.ai-dropdown-item .ai-shortcut {
+  color: var(--ai-text-secondary);
+  font-size: 10px;
+  margin-left: 18px;
+}
+
+.ai-dropdown-item:hover:not(:disabled) .ai-shortcut {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.ai-dropdown-divider {
+  height: 1px;
+  background-color: var(--ai-border-subtle);
+  margin: 3px 0;
+}
+
+/* ============================================================================
+   DOCUMENT TABS BAR
+   ============================================================================ */
+
+.ai-doctabs-bar {
+  height: 25px;
+  background-color: var(--ai-bg-header);
+  border-bottom: 1px solid var(--ai-border-strong);
+  display: flex;
+  align-items: flex-end;
+  padding: 0 4px;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+.ai-doctab {
+  height: 23px;
+  padding: 0 8px 0 10px;
+  background-color: var(--ai-bg-panel-tab-inactive);
+  border: 1px solid var(--ai-border-strong);
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+  color: var(--ai-text-secondary);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  max-width: 240px;
+  white-space: nowrap;
+}
+
+.ai-doctab.active {
+  background-color: var(--ai-bg-panel);
+  color: var(--ai-text-primary);
+  font-weight: 500;
+  border-top: 2px solid var(--ai-accent-blue);
+}
+
+.ai-doctab:hover:not(.active) {
+  background-color: var(--ai-bg-hover);
+  color: var(--ai-text-primary);
+}
+
+/* ============================================================================
+   CONTEXTUAL CONTROL BAR (SUB-HEADER)
+   ============================================================================ */
+
+.ai-controlbar {
+  height: 31px;
+  background-color: var(--ai-bg-controlbar);
+  border-bottom: 1px solid var(--ai-border-strong);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 6px;
+  overflow-x: auto;
+  white-space: nowrap;
+  z-index: 90;
+}
+
+.ai-controlbar-sep {
+  width: 1px;
+  height: 18px;
+  background-color: var(--ai-border-strong);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+/* ============================================================================
+   LEFT TOOLBAR & TEAR-OFF FLOATING PALETTES
+   ============================================================================ */
+
+.ai-left-toolbar {
+  background-color: var(--ai-bg-toolbar);
+  border-right: 1px solid var(--ai-border-strong);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 3px 2px 6px;
+  z-index: 80;
+  flex-shrink: 0;
+}
+
+.ai-left-toolbar.cols-1 {
+  width: 36px;
+}
+
+.ai-left-toolbar.cols-2 {
+  width: 64px;
+}
+
+.ai-tool-grid {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  justify-items: center;
+}
+
+.ai-left-toolbar.cols-1 .ai-tool-grid {
+  grid-template-columns: 1fr;
+}
+
+.ai-left-toolbar.cols-2 .ai-tool-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.ai-tool-btn {
+  width: 28px;
+  height: 26px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--ai-text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+  padding: 0;
+}
+
+.ai-tool-btn:hover {
+  background-color: var(--ai-bg-hover);
+}
+
+.ai-tool-btn.active {
+  background-color: var(--ai-bg-active);
+  border-color: var(--ai-border-strong);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45);
+  color: #ffffff;
+}
+
+.ai-tool-btn.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background-color: var(--ai-accent-blue);
+}
+
+.ai-tool-flyout-corner {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 4px 4px;
+  border-color: transparent transparent var(--ai-text-secondary) transparent;
+}
+
+/* ============================================================================
+   DOCKABLE PANELS, TABS & COLLAPSED ICON STRIPS
+   ============================================================================ */
+
+.ai-panel-shell {
+  background-color: var(--ai-bg-panel);
+  border: 1px solid var(--ai-border-strong);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ai-panel-tabbar {
+  height: 24px;
+  background-color: var(--ai-bg-panel-header);
+  border-bottom: 1px solid var(--ai-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.ai-panel-tab {
+  height: 23px;
+  padding: 0 9px;
+  background-color: var(--ai-bg-panel-tab-inactive);
+  border: none;
+  border-right: 1px solid var(--ai-border-strong);
+  color: var(--ai-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.ai-panel-tab.active {
+  background-color: var(--ai-bg-panel-tab-active);
+  color: var(--ai-text-primary);
+  border-top: 2px solid var(--ai-accent-blue);
+}
+
+.ai-panel-tab:hover:not(.active) {
+  color: var(--ai-text-primary);
+  background-color: var(--ai-bg-hover);
+}
+
+.ai-panel-body {
+  padding: 6px 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.ai-panel-footer {
+  height: 24px;
+  background-color: var(--ai-bg-panel-header);
+  border-top: 1px solid var(--ai-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 4px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+   PRIMITIVE INPUTS, BUTTONS & SCRUBBERS
+   ============================================================================ */
+
+.ai-input {
+  height: 21px;
+  background-color: var(--ai-bg-input);
+  border: 1px solid var(--ai-border-input);
+  border-radius: 2px;
+  padding: 0 5px;
+  color: var(--ai-text-primary);
+  font-size: 11px;
+  outline: none;
+}
+
+.ai-input:focus {
+  background-color: var(--ai-bg-input-focus);
+  border-color: var(--ai-border-focus);
+}
+
+.ai-select {
+  height: 21px;
+  background-color: var(--ai-bg-input);
+  border: 1px solid var(--ai-border-input);
+  border-radius: 2px;
+  padding: 0 4px;
+  color: var(--ai-text-primary);
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+}
+
+.ai-select:focus {
+  border-color: var(--ai-border-focus);
+}
+
+.ai-btn {
+  height: 22px;
+  padding: 0 8px;
+  background-color: var(--ai-bg-elevated);
+  border: 1px solid var(--ai-border-input);
+  border-radius: 2px;
+  color: var(--ai-text-primary);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.ai-btn:hover:not(:disabled) {
+  background-color: var(--ai-bg-hover);
+}
+
+.ai-btn:active:not(:disabled),
+.ai-btn.active {
+  background-color: var(--ai-accent-blue);
+  border-color: var(--ai-accent-blue);
+  color: var(--ai-text-inverse);
+}
+
+.ai-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ai-icon-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--ai-text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.ai-icon-btn:hover:not(:disabled) {
+  background-color: var(--ai-bg-hover);
+}
+
+.ai-icon-btn.active {
+  background-color: var(--ai-bg-active);
+  border-color: var(--ai-border-strong);
+  color: var(--ai-accent-blue);
+}
+
+.ai-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Transparency Checkerboard Utility */
+.ai-checkerboard {
+  background-image:
+    linear-gradient(45deg, #cccccc 25%, transparent 25%),
+    linear-gradient(-45deg, #cccccc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #cccccc 75%),
+    linear-gradient(-45deg, transparent 75%, #cccccc 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-color: #ffffff;
+}
