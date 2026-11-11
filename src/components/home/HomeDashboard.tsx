@@ -51,9 +51,16 @@ export interface HomeDashboardProps {
   onClose?: () => void;
 }
 
+function darkenAccent(color: string): string {
+  const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(color);
+  if (!match) return 'var(--ai-text-primary)';
+  return `#${match.slice(1).map(value => Math.round(parseInt(value, 16) * 0.52).toString(16).padStart(2, '0')).join('')}`;
+}
+
 export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
   const store = useStudioStore() as any;
   const language: 'id' | 'en' = store.language || 'en';
+  const lightTheme = store.uiBrightness === 'light' || store.uiBrightness === 'medium-light';
 
   const [navTab, setNavTab] = useState<HomeNavTab>('home');
   const [presetCategory, setPresetCategory] = useState<PresetCategoryTab>('web');
@@ -210,6 +217,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
   };
 
   const handleDeleteProject = async (id: string) => {
+    if (!window.confirm('Delete this local project? This cannot be undone.')) return;
     await deleteProjectFromDb(id);
     setMenuOpenId(null);
     await refreshData();
@@ -245,8 +253,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
         inset: 0,
         zIndex: 900,
         display: 'flex',
-        background: '#1e1e1e',
-        color: '#e8e8e8',
+        background: 'var(--ai-bg-app)',
+        color: 'var(--ai-text-primary)',
         fontFamily: 'Inter, Segoe UI, system-ui, sans-serif',
         fontSize: 12,
         userSelect: 'none',
@@ -264,7 +272,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
       <aside
         style={{
           width: 228,
-          background: '#262626',
+          background: 'var(--ai-bg-header)',
           borderRight: '1px solid #141414',
           display: 'flex',
           flexDirection: 'column',
@@ -280,7 +288,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             alignItems: 'center',
             gap: 10,
             padding: '4px 8px 16px 8px',
-            borderBottom: '1px solid #333333',
+            borderBottom: '1px solid var(--ai-border-subtle)',
             marginBottom: 8,
           }}
         >
@@ -303,10 +311,10 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             Ai
           </div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 13, color: '#ffffff' }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ai-text-primary)' }}>
               Adore Illustratoze
             </div>
-            <div style={{ fontSize: 10, color: '#9e9e9e' }}>Vector Graphics Studio CC</div>
+            <div style={{ fontSize: 10, color: 'var(--ai-text-secondary)' }}>Vector Graphics Studio CC</div>
           </div>
         </div>
 
@@ -340,7 +348,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             borderRadius: 16,
             background: 'transparent',
             border: '1px solid #5a5a5a',
-            color: '#e8e8e8',
+            color: 'var(--ai-text-primary)',
             fontWeight: 500,
             fontSize: 12,
             display: 'flex',
@@ -384,9 +392,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                 height: 32,
                 padding: '0 12px',
                 borderRadius: 5,
-                background: active ? '#383838' : 'transparent',
+                background: active ? 'var(--ai-bg-hover)' : 'transparent',
                 border: 'none',
-                color: active ? '#ffffff' : '#b8b8b8',
+                color: active ? 'var(--ai-text-primary)' : 'var(--ai-text-secondary)',
                 fontWeight: active ? 600 : 400,
                 display: 'flex',
                 alignItems: 'center',
@@ -411,7 +419,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             borderRadius: 5,
             background: 'transparent',
             border: 'none',
-            color: '#b8b8b8',
+            color: 'var(--ai-text-secondary)',
             display: 'flex',
             alignItems: 'center',
             gap: 10,
@@ -438,8 +446,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             height: 32,
             padding: '0 12px',
             borderRadius: 5,
-            background: '#323232',
-            border: '1px solid #444',
+            background: 'var(--ai-bg-panel)',
+            border: '1px solid var(--ai-border-subtle)',
             color: '#ff9a00',
             fontWeight: 600,
             display: 'flex',
@@ -468,7 +476,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
         {recoveryDoc && (
           <div
             style={{
-              background: '#2d2314',
+              background: 'var(--ai-bg-elevated)',
               border: '1px solid #ff9a00',
               borderRadius: 6,
               padding: '10px 14px',
@@ -480,10 +488,10 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <AlertTriangle size={16} color="#ff9a00" />
               <div>
-                <div style={{ fontWeight: 600, color: '#ffffff' }}>
+                <div style={{ fontWeight: 600, color: 'var(--ai-text-primary)' }}>
                   Unsaved Session Recovery Available: "{recoveryDoc.document.name}"
                 </div>
-                <div style={{ fontSize: 11, color: '#b8b8b8' }}>
+                <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>
                   Autosaved at {new Date(recoveryDoc.savedAt).toLocaleTimeString()}
                 </div>
               </div>
@@ -517,8 +525,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                   padding: '5px 10px',
                   borderRadius: 4,
                   background: 'transparent',
-                  color: '#b8b8b8',
-                  border: '1px solid #555',
+                  color: 'var(--ai-text-secondary)',
+                  border: '1px solid var(--ai-border-subtle)',
                   cursor: 'pointer',
                 }}
               >
@@ -532,8 +540,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
         {navTab === 'home' && (
           <section
             style={{
-              background: '#262626',
-              border: '1px solid #333333',
+              background: 'var(--ai-bg-header)',
+              border: '1px solid var(--ai-border-subtle)',
               borderRadius: 8,
               padding: '16px 20px',
             }}
@@ -543,22 +551,24 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 12,
                 marginBottom: 14,
               }}
             >
               <div>
-                <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: '#ffffff' }}>
+                <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--ai-text-primary)' }}>
                   {language === 'id'
                     ? 'Mulai Cepat dengan Preset Dokumen'
                     : 'Start a New Vector Document'}
                 </h2>
-                <div style={{ fontSize: 11, color: '#9e9e9e', marginTop: 2 }}>
+                <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 2 }}>
                   Choose a standard industry artboard size or configure custom bleed & units
                 </div>
               </div>
 
               {/* Category Tabs */}
-              <div style={{ display: 'flex', gap: 4, background: '#1e1e1e', padding: 3, borderRadius: 6 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, background: 'var(--ai-bg-app)', padding: 3, borderRadius: 6 }}>
                 {(
                   [
                     { id: 'saved', label: 'Saved' },
@@ -577,8 +587,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                       borderRadius: 4,
                       border: 'none',
                       background: presetCategory === cat.id ? '#1473e6' : 'transparent',
-                      color: presetCategory === cat.id ? '#ffffff' : '#b8b8b8',
+                      color: presetCategory === cat.id ? '#ffffff' : 'var(--ai-text-secondary)',
                       fontSize: 11,
+                      whiteSpace: 'nowrap',
                       fontWeight: presetCategory === cat.id ? 600 : 400,
                       cursor: 'pointer',
                     }}
@@ -596,7 +607,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                   style={{
                     padding: '20px',
                     textAlign: 'center',
-                    color: '#9e9e9e',
+                    color: 'var(--ai-text-secondary)',
                     border: '1px dashed #3f3f3f',
                     borderRadius: 6,
                   }}
@@ -617,15 +628,15 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                       key={cp.id}
                       onClick={() => handleCreateFromCustomPreset(cp)}
                       style={{
-                        background: '#323232',
-                        border: '1px solid #444',
+                        background: 'var(--ai-bg-panel)',
+                        border: '1px solid var(--ai-border-subtle)',
                         borderRadius: 6,
                         padding: 12,
                         cursor: 'pointer',
                       }}
                     >
-                      <div style={{ fontWeight: 600, color: '#ffffff' }}>{cp.name}</div>
-                      <div style={{ fontSize: 11, color: '#9e9e9e', marginTop: 4 }}>
+                      <div style={{ fontWeight: 600, color: 'var(--ai-text-primary)' }}>{cp.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 4 }}>
                         {cp.width} × {cp.height} {cp.unit} • {cp.colorMode}
                       </div>
                     </div>
@@ -645,8 +656,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                     key={preset.id}
                     onClick={() => handleCreateFromPreset(preset)}
                     style={{
-                      background: '#323232',
-                      border: '1px solid #3f3f3f',
+                      background: 'var(--ai-bg-panel)',
+                      border: '1px solid var(--ai-border-subtle)',
                       borderRadius: 6,
                       padding: '12px 14px',
                       cursor: 'pointer',
@@ -682,10 +693,10 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                         </span>
                       )}
                     </div>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: '#ffffff', marginTop: 2 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--ai-text-primary)', marginTop: 2 }}>
                       {preset.name}
                     </div>
-                    <div style={{ fontSize: 11, color: '#9e9e9e' }}>{preset.description}</div>
+                    <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>{preset.description}</div>
                   </div>
                 ))}
               </div>
@@ -706,13 +717,13 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Sparkles size={16} color="#ff9a00" />
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: '#ffffff' }}>
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--ai-text-primary)' }}>
                   {language === 'id'
                     ? 'Galeri Template Vektor Siap Pakai'
                     : 'Factory Starter Vector Templates'}
                 </h3>
               </div>
-              <span style={{ fontSize: 11, color: '#9e9e9e' }}>
+              <span style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>
                 One-click open complete multi-layer vector documents
               </span>
             </div>
@@ -729,8 +740,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                   key={tpl.id}
                   onClick={() => handleOpenStarterTemplate(tpl)}
                   style={{
-                    background: '#262626',
-                    border: '1px solid #383838',
+                    background: 'var(--ai-bg-header)',
+                    border: '1px solid var(--ai-border-subtle)',
                     borderRadius: 8,
                     overflow: 'hidden',
                     cursor: 'pointer',
@@ -743,7 +754,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                     style={{
                       height: 116,
                       background: `radial-gradient(circle at 30% 30%, ${tpl.previewAccent}33, #141414 80%)`,
-                      borderBottom: '1px solid #333333',
+                      borderBottom: '1px solid var(--ai-border-subtle)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -795,13 +806,13 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                   </div>
 
                   <div style={{ padding: '12px 14px', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <div style={{ fontSize: 10, color: tpl.previewAccent, fontWeight: 600 }}>
+                    <div style={{ fontSize: 10, color: lightTheme ? darkenAccent(tpl.previewAccent) : tpl.previewAccent, fontWeight: 600 }}>
                       {tpl.category}
                     </div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#ffffff' }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ai-text-primary)' }}>
                       {tpl.name}
                     </div>
-                    <div style={{ fontSize: 11, color: '#9e9e9e', lineHeight: 1.35 }}>
+                    <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', lineHeight: 1.35 }}>
                       {tpl.description}
                     </div>
                     <div
@@ -809,14 +820,15 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                         marginTop: 'auto',
                         paddingTop: 8,
                         fontSize: 10,
-                        color: '#b8b8b8',
+                        color: 'var(--ai-text-secondary)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
+                        gap: 8,
                       }}
                     >
                       <span>{tpl.dimensionsLabel}</span>
-                      <span style={{ color: '#1473e6', fontWeight: 600 }}>Open →</span>
+                      <span style={{ color: '#1473e6', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>Open →</span>
                     </div>
                   </div>
                 </div>
@@ -838,7 +850,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Clock size={16} color="#1473e6" />
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: '#ffffff' }}>
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--ai-text-primary)' }}>
                   {language === 'id' ? 'Proyek Terbaru (IndexedDB)' : 'Recent Projects'} (
                   {filteredProjects.length})
                 </h3>
@@ -869,9 +881,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                       paddingLeft: 26,
                       paddingRight: 8,
                       borderRadius: 4,
-                      background: '#2b2b2b',
-                      border: '1px solid #3f3f3f',
-                      color: '#e8e8e8',
+                      background: 'var(--ai-bg-input)',
+                      border: '1px solid var(--ai-border-subtle)',
+                      color: 'var(--ai-text-primary)',
                       fontSize: 11,
                     }}
                   />
@@ -884,9 +896,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                     height: 28,
                     padding: '0 8px',
                     borderRadius: 4,
-                    background: '#2b2b2b',
-                    border: '1px solid #3f3f3f',
-                    color: '#e8e8e8',
+                    background: 'var(--ai-bg-input)',
+                    border: '1px solid var(--ai-border-subtle)',
+                    color: 'var(--ai-text-primary)',
                     fontSize: 11,
                   }}
                 >
@@ -898,8 +910,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                 <div
                   style={{
                     display: 'flex',
-                    background: '#2b2b2b',
-                    border: '1px solid #3f3f3f',
+                    background: 'var(--ai-bg-input)',
+                    border: '1px solid var(--ai-border-subtle)',
                     borderRadius: 4,
                     overflow: 'hidden',
                   }}
@@ -912,7 +924,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                       height: 26,
                       border: 'none',
                       background: viewMode === 'grid' ? '#1473e6' : 'transparent',
-                      color: '#ffffff',
+                      color: viewMode === 'grid' ? '#ffffff' : 'var(--ai-text-primary)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -929,7 +941,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                       height: 26,
                       border: 'none',
                       background: viewMode === 'list' ? '#1473e6' : 'transparent',
-                      color: '#ffffff',
+                      color: viewMode === 'list' ? '#ffffff' : 'var(--ai-text-primary)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -945,15 +957,15 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             {filteredProjects.length === 0 ? (
               <div
                 style={{
-                  background: '#262626',
+                  background: 'var(--ai-bg-header)',
                   border: '1px dashed #3f3f3f',
                   borderRadius: 8,
                   padding: '36px 20px',
                   textAlign: 'center',
-                  color: '#9e9e9e',
+                  color: 'var(--ai-text-secondary)',
                 }}
               >
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#e8e8e8', marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ai-text-primary)', marginBottom: 4 }}>
                   No saved projects match your filter
                 </div>
                 <div style={{ fontSize: 11 }}>
@@ -973,13 +985,14 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                   <div
                     key={proj.id}
                     style={{
-                      background: '#262626',
-                      border: '1px solid #383838',
+                      background: 'var(--ai-bg-header)',
+                      border: '1px solid var(--ai-border-subtle)',
                       borderRadius: 8,
-                      overflow: 'hidden',
+                      overflow: 'visible',
                       display: 'flex',
                       flexDirection: 'column',
                       position: 'relative',
+                      zIndex: menuOpenId === proj.id ? 21 : 'auto',
                     }}
                   >
                     <div
@@ -987,7 +1000,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                       style={{
                         height: 128,
                         background: '#1a1a1a',
-                        borderBottom: '1px solid #333',
+                        borderBottom: '1px solid var(--ai-border-subtle)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -1002,7 +1015,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                           style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                         />
                       ) : (
-                        <CheckCircle2 size={28} color="#555" />
+                        <Layers size={28} color="#555" />
                       )}
                     </div>
 
@@ -1020,9 +1033,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                           }}
                           style={{
                             height: 22,
-                            background: '#1e1e1e',
+                            background: 'var(--ai-bg-app)',
                             border: '1px solid #1473e6',
-                            color: '#ffffff',
+                            color: 'var(--ai-text-primary)',
                             borderRadius: 3,
                             padding: '0 6px',
                             fontSize: 12,
@@ -1040,7 +1053,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                             onClick={() => handleOpenProject(proj)}
                             style={{
                               fontWeight: 600,
-                              color: '#ffffff',
+                              color: 'var(--ai-text-primary)',
                               cursor: 'pointer',
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
@@ -1056,7 +1069,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                             style={{
                               background: 'transparent',
                               border: 'none',
-                              color: '#9e9e9e',
+                              color: 'var(--ai-text-secondary)',
                               cursor: 'pointer',
                               padding: 2,
                             }}
@@ -1066,11 +1079,11 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                         </div>
                       )}
 
-                      <div style={{ fontSize: 10, color: '#9e9e9e' }}>
+                      <div style={{ fontSize: 10, color: 'var(--ai-text-secondary)' }}>
                         {Math.round(proj.width)} × {Math.round(proj.height)} {proj.unit} •{' '}
                         {proj.colorMode} • {proj.artboardCount} Artboard(s)
                       </div>
-                      <div style={{ fontSize: 10, color: '#777777' }}>
+                      <div style={{ fontSize: 10, color: 'var(--ai-text-muted)' }}>
                         Modified {new Date(proj.updatedAt).toLocaleString()}
                       </div>
                     </div>
@@ -1082,8 +1095,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                           position: 'absolute',
                           right: 10,
                           bottom: 36,
-                          background: '#323232',
-                          border: '1px solid #4f4f4f',
+                          background: 'var(--ai-bg-panel)',
+                          border: '1px solid var(--ai-border-subtle)',
                           borderRadius: 6,
                           padding: 4,
                           zIndex: 20,
@@ -1131,8 +1144,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
               /* LIST VIEW */
               <div
                 style={{
-                  background: '#262626',
-                  border: '1px solid #383838',
+                  background: 'var(--ai-bg-header)',
+                  border: '1px solid var(--ai-border-subtle)',
                   borderRadius: 8,
                   overflow: 'hidden',
                 }}
@@ -1142,9 +1155,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                     <tr
                       style={{
                         background: '#2f2f2f',
-                        color: '#9e9e9e',
+                        color: 'var(--ai-text-secondary)',
                         textAlign: 'left',
-                        borderBottom: '1px solid #3f3f3f',
+                        borderBottom: '1px solid var(--ai-border-subtle)',
                       }}
                     >
                       <th style={{ padding: '8px 12px' }}>Project Name</th>
@@ -1166,20 +1179,20 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                           style={{
                             padding: '8px 12px',
                             fontWeight: 600,
-                            color: '#ffffff',
+                            color: 'var(--ai-text-primary)',
                             cursor: 'pointer',
                           }}
                         >
                           {proj.name}
                         </td>
-                        <td style={{ padding: '8px 12px', color: '#b8b8b8' }}>
+                        <td style={{ padding: '8px 12px', color: 'var(--ai-text-secondary)' }}>
                           {Math.round(proj.width)} × {Math.round(proj.height)} {proj.unit}
                         </td>
-                        <td style={{ padding: '8px 12px', color: '#b8b8b8' }}>{proj.colorMode}</td>
-                        <td style={{ padding: '8px 12px', color: '#b8b8b8' }}>
+                        <td style={{ padding: '8px 12px', color: 'var(--ai-text-secondary)' }}>{proj.colorMode}</td>
+                        <td style={{ padding: '8px 12px', color: 'var(--ai-text-secondary)' }}>
                           {proj.artboardCount}
                         </td>
-                        <td style={{ padding: '8px 12px', color: '#9e9e9e' }}>
+                        <td style={{ padding: '8px 12px', color: 'var(--ai-text-secondary)' }}>
                           {new Date(proj.updatedAt).toLocaleString()}
                         </td>
                         <td style={{ padding: '8px 12px', textAlign: 'right' }}>
@@ -1228,7 +1241,7 @@ const actionMenuBtnStyle: React.CSSProperties = {
   padding: '6px 10px',
   background: 'transparent',
   border: 'none',
-  color: '#e8e8e8',
+  color: 'var(--ai-text-primary)',
   fontSize: 11,
   display: 'flex',
   alignItems: 'center',
@@ -1241,9 +1254,9 @@ const actionMenuBtnStyle: React.CSSProperties = {
 const listSmallBtnStyle: React.CSSProperties = {
   padding: '3px 8px',
   borderRadius: 4,
-  background: '#383838',
+  background: 'var(--ai-bg-hover)',
   border: '1px solid #4a4a4a',
-  color: '#e8e8e8',
+  color: 'var(--ai-text-primary)',
   fontSize: 10,
   cursor: 'pointer',
 };

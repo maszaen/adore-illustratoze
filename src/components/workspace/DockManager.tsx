@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useStudioStore } from '../../state/useStudioStore';
+import { PANEL_METADATA_MAP } from '../panels/PanelRegistry';
+import { readDockWorkspace, saveDockWorkspace } from './workspaceStorage';
 
 export interface DockTabGroup {
   id: string;
@@ -32,35 +34,14 @@ export interface WorkspaceDockLayout {
   floatingWindows: FloatingPanelWindow[];
 }
 
+type DockColumn = 'leftColumn' | 'bottomRow' | 'rightInnerColumn' | 'rightOuterColumn';
+
 export interface DockManagerProps {
   renderPanel: (panelId: string) => React.ReactNode;
   children?: React.ReactNode;
 }
 
-export const PANEL_METADATA: Record<
-  string,
-  { title: string; titleId: string; shortIcon: string }
-> = {
-  properties: { title: 'Properties', titleId: 'Properti', shortIcon: 'Pr' },
-  layers: { title: 'Layers', titleId: 'Lapisan', shortIcon: 'Ly' },
-  appearance: { title: 'Appearance', titleId: 'Tampilan', shortIcon: 'Ap' },
-  color: { title: 'Color', titleId: 'Warna', shortIcon: 'Cl' },
-  swatches: { title: 'Swatches', titleId: 'Palet Warna', shortIcon: 'Sw' },
-  gradient: { title: 'Gradient', titleId: 'Gradasi', shortIcon: 'Gr' },
-  stroke: { title: 'Stroke', titleId: 'Garis Tepi', shortIcon: 'St' },
-  transparency: { title: 'Transparency', titleId: 'Transparansi', shortIcon: 'Tr' },
-  pathfinder: { title: 'Pathfinder', titleId: 'Pathfinder', shortIcon: 'Pf' },
-  align: { title: 'Align', titleId: 'Perataan', shortIcon: 'Al' },
-  transform: { title: 'Transform', titleId: 'Transformasi', shortIcon: 'Tf' },
-  brushes: { title: 'Brushes', titleId: 'Kuas Vektor', shortIcon: 'Br' },
-  symbols: { title: 'Symbols', titleId: 'Simbol', shortIcon: 'Sy' },
-  'graphic-styles': { title: 'Graphic Styles', titleId: 'Gaya Grafis', shortIcon: 'Gs' },
-  character: { title: 'Character', titleId: 'Tipografi', shortIcon: 'Ch' },
-  artboards: { title: 'Artboards', titleId: 'Artboard', shortIcon: 'Ab' },
-  'image-trace': { title: 'Image Trace', titleId: 'Vektorisasi', shortIcon: 'It' },
-  'asset-export': { title: 'Asset Export', titleId: 'Ekspor Aset', shortIcon: 'Ex' },
-  history: { title: 'History', titleId: 'Riwayat', shortIcon: 'Hs' },
-};
+export const PANEL_METADATA: Record<string, { title: string; titleId: string; shortIcon: string }> = PANEL_METADATA_MAP;
 
 export function createPresetLayout(preset: string): WorkspaceDockLayout {
   switch (preset) {
@@ -146,7 +127,7 @@ export function createPresetLayout(preset: string): WorkspaceDockLayout {
           {
             id: 'grp-typo-outer-1',
             tabs: ['properties', 'appearance', 'graphic-styles'],
-            activeTab: 'character',
+            activeTab: 'properties',
             heightWeight: 1,
           },
           {
@@ -189,8 +170,22 @@ export function createPresetLayout(preset: string): WorkspaceDockLayout {
         floatingWindows: [],
       };
 
-    case 'layout-print':
-    case 'web':
+    case 'layout-print': {
+      const layout = createPresetLayout('essentials');
+      layout.rightOuterColumn = [
+        { id: 'grp-print-type', tabs: ['properties', 'character', 'paragraph'], activeTab: 'properties', heightWeight: 1 },
+        { id: 'grp-print-layout', tabs: ['layers', 'artboards', 'align', 'transform'], activeTab: 'layers', heightWeight: 1 },
+      ];
+      return layout;
+    }
+    case 'web': {
+      const layout = createPresetLayout('essentials');
+      layout.rightOuterColumn = [
+        { id: 'grp-web-design', tabs: ['properties', 'color', 'swatches'], activeTab: 'properties', heightWeight: 1 },
+        { id: 'grp-web-assets', tabs: ['layers', 'artboards', 'asset-export'], activeTab: 'layers', heightWeight: 1 },
+      ];
+      return layout;
+    }
     case 'essentials-classic':
     default:
       return {
@@ -245,12 +240,25 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
   const hideAllPanels: boolean = Boolean(store.hideAllPanels);
   const screenMode: string = store.screenMode || 'normal';
 
+  const [workspaceId, setWorkspaceId] = useState<string>(() => store.activeWorkspace || 'essentials-classic');
+  const initialWorkspace = useRef(readDockWorkspace(store.activeWorkspace || 'essentials-classic'));
   const [layout, setLayout] = useState<WorkspaceDockLayout>(() =>
-    createPresetLayout(store.activeWorkspace || 'essentials-classic')
+    initialWorkspace.current?.layout || createPresetLayout(store.activeWorkspace || 'essentials-classic')
   );
+  const [rightOuterWidth, setRightOuterWidth] = useState<number>(() => initialWorkspace.current?.rightOuterWidth ?? 286);
+  const [rightInnerWidth, setRightInnerWidth] = useState<number>(() => initialWorkspace.current?.rightInnerWidth ?? 264);
 
-  const [rightOuterWidth, setRightOuterWidth] = useState<number>(286);
-  const [rightInnerWidth, setRightInnerWidth] = useState<number>(264);
+  useEffect(() => {
+    saveDockWorkspace(workspaceId, { version: 1, layout, rightOuterWidth, rightInnerWidth });
+  }, [workspaceId, layout, rightOuterWidth, rightInnerWidth]);
+
+  useEffect(() => {
+    const clampWindows = () => setLayout(prev => ({ ...prev, floatingWindows: prev.floatingWindows.map(win => ({
+      ...win, x: Math.max(0, Math.min(win.x, window.innerWidth - 120)), y: Math.max(0, Math.min(win.y, window.innerHeight - 50)),
+    })) }));
+    window.addEventListener('resize', clampWindows);
+    return () => window.removeEventListener('resize', clampWindows);
+  }, []);
 
   // Active flyout when clicking an icon in a collapsed dock column
   const [activeFlyoutGroup, setActiveFlyoutGroup] = useState<{
@@ -264,14 +272,24 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
     sourceGroupId: string;
     startX: number;
     startY: number;
+    moved: boolean;
   } | null>(null);
+  const suppressTabClickRef = useRef(false);
+  const [dropGroupId, setDropGroupId] = useState<string | null>(null);
+  const [draggingPanel, setDraggingPanel] = useState(false);
+  const [dropDestination, setDropDestination] = useState<DockColumn | null>(null);
+  const [frontWindowId, setFrontWindowId] = useState<string | null>(null);
 
   // Listen for Workspace Switcher & Window menu panel open events
   useEffect(() => {
     const onPresetChange = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.preset) {
-        setLayout(createPresetLayout(detail.preset));
+        const saved = detail.reset ? null : readDockWorkspace(detail.preset);
+        setWorkspaceId(detail.preset);
+        setLayout(saved?.layout || createPresetLayout(detail.preset));
+        setRightOuterWidth(saved?.rightOuterWidth ?? 286);
+        setRightInnerWidth(saved?.rightInnerWidth ?? 264);
         setActiveFlyoutGroup(null);
       }
     };
@@ -314,6 +332,17 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
                 activeTab: panelId,
               });
             }
+            return next;
+          }
+        }
+
+        // Search the left and bottom docks too; never open a duplicate.
+        for (const [column, collapsed] of [['leftColumn', 'leftCollapsed'], ['bottomRow', 'bottomCollapsed']] as const) {
+          const group = next[column].find(item => item.tabs.includes(panelId));
+          if (group) {
+            group.activeTab = panelId;
+            group.minimized = false;
+            next[collapsed] = false;
             return next;
           }
         }
@@ -386,6 +415,7 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
       removeFromColumn(next.rightOuterColumn);
       removeFromColumn(next.rightInnerColumn);
       removeFromColumn(next.leftColumn);
+      removeFromColumn(next.bottomRow);
 
       next.floatingWindows.push({
         id: `float-${panelId}-${Date.now()}`,
@@ -404,14 +434,14 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
   };
 
   // Dock a floating window back into the right outer dock column
-  const dockFloatingWindowBack = (floatId: string, targetCol: 'rightOuter' | 'rightInner' = 'rightOuter') => {
+  const dockFloatingWindowBack = (floatId: string, targetCol: DockColumn = 'rightOuterColumn') => {
     setLayout((prev) => {
       const next: WorkspaceDockLayout = JSON.parse(JSON.stringify(prev));
       const idx = next.floatingWindows.findIndex((w) => w.id === floatId);
       if (idx === -1) return prev;
       const [win] = next.floatingWindows.splice(idx, 1);
 
-      const col = targetCol === 'rightOuter' ? next.rightOuterColumn : next.rightInnerColumn;
+      const col = next[targetCol];
       if (col.length > 0) {
         for (const tab of win.tabs) {
           if (!col[0].tabs.includes(tab)) {
@@ -427,47 +457,95 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
           heightWeight: 1,
         });
       }
-      if (targetCol === 'rightOuter') next.rightOuterCollapsed = false;
-      else next.rightInnerCollapsed = false;
+      if (targetCol === 'rightOuterColumn') next.rightOuterCollapsed = false;
+      else if (targetCol === 'rightInnerColumn') next.rightInnerCollapsed = false;
+      else if (targetCol === 'leftColumn') next.leftCollapsed = false;
+      else next.bottomCollapsed = false;
       return next;
     });
   };
 
-  // Drag tab to tear off if pulled >45px away from tab header
-  const handleTabPointerDown = (
-    panelId: string,
-    groupId: string,
-    e: React.PointerEvent
-  ) => {
-    if (e.button !== 0) return;
-    dragTabRef.current = {
-      panelId,
-      sourceGroupId: groupId,
-      startX: e.clientX,
-      startY: e.clientY,
-    };
+  const moveTabToColumn = (panelId: string, groupId: string, targetColumn: DockColumn) => {
+    setLayout(previous => {
+      const next: WorkspaceDockLayout = JSON.parse(JSON.stringify(previous));
+      const columns: DockColumn[] = ['leftColumn', 'rightInnerColumn', 'rightOuterColumn', 'bottomRow'];
+      const sourceName = columns.find(name => next[name].some(group => group.id === groupId));
+      if (!sourceName || sourceName === targetColumn) return previous;
+      const source = next[sourceName];
+      const group = source.find(item => item.id === groupId);
+      if (!group || !group.tabs.includes(panelId)) return previous;
+      group.tabs = group.tabs.filter(id => id !== panelId);
+      if (group.activeTab === panelId) group.activeTab = group.tabs[0] || '';
+      if (!group.tabs.length) source.splice(source.indexOf(group), 1);
+      const target = next[targetColumn];
+      if (!target.length) target.push({ id: `grp-moved-${Date.now()}-${panelId}`, tabs: [], activeTab: panelId });
+      if (!target[0].tabs.includes(panelId)) target[0].tabs.push(panelId);
+      target[0].activeTab = panelId;
+      target[0].minimized = false;
+      if (targetColumn === 'rightInnerColumn') next.rightInnerCollapsed = false;
+      else if (targetColumn === 'rightOuterColumn') next.rightOuterCollapsed = false;
+      else if (targetColumn === 'leftColumn') next.leftCollapsed = false;
+      else next.bottomCollapsed = false;
+      return next;
+    });
+  };
 
+  // Drop on a group to move/reorder a tab; drop elsewhere to float it.
+  const handleTabPointerDown = (panelId: string, groupId: string, e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    suppressTabClickRef.current = false;
+    dragTabRef.current = { panelId, sourceGroupId: groupId, startX: e.clientX, startY: e.clientY, moved: false };
     const handleMove = (mv: PointerEvent) => {
-      if (!dragTabRef.current) return;
-      const dist = Math.hypot(
-        mv.clientX - dragTabRef.current.startX,
-        mv.clientY - dragTabRef.current.startY
-      );
-      if (dist > 48) {
-        const { panelId: pId, sourceGroupId: sId } = dragTabRef.current;
-        dragTabRef.current = null;
-        tearOffTabToFloating(pId, sId, mv.clientX, mv.clientY);
-        window.removeEventListener('pointermove', handleMove);
-        window.removeEventListener('pointerup', handleUp);
+      const drag = dragTabRef.current;
+      if (!drag) return;
+      if (Math.hypot(mv.clientX - drag.startX, mv.clientY - drag.startY) > 8) drag.moved = true;
+      if (drag.moved) {
+        setDraggingPanel(true);
+        const element = document.elementFromPoint(mv.clientX, mv.clientY);
+        const group = element?.closest<HTMLElement>('[data-dock-group]');
+        setDropGroupId(group?.dataset.dockGroup || null);
+        setDropDestination((element?.closest<HTMLElement>('[data-dock-destination]')?.dataset.dockDestination as DockColumn) || null);
       }
     };
-
-    const handleUp = () => {
+    const handleUp = (up: PointerEvent) => {
+      const drag = dragTabRef.current;
       dragTabRef.current = null;
+      setDropGroupId(null);
+      setDraggingPanel(false);
+      setDropDestination(null);
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
+      if (!drag?.moved) return;
+      suppressTabClickRef.current = true;
+      window.setTimeout(() => { suppressTabClickRef.current = false; }, 0);
+      const targetElement = document.elementFromPoint(up.clientX, up.clientY);
+      const destination = targetElement?.closest<HTMLElement>('[data-dock-destination]')?.dataset.dockDestination as DockColumn | undefined;
+      if (destination) { moveTabToColumn(drag.panelId, drag.sourceGroupId, destination); return; }
+      const targetGroupId = targetElement?.closest<HTMLElement>('[data-dock-group]')?.dataset.dockGroup;
+      const targetTabId = targetElement?.closest<HTMLElement>('[data-dock-tab]')?.dataset.dockTab;
+      if (!targetGroupId) {
+        tearOffTabToFloating(drag.panelId, drag.sourceGroupId, up.clientX, up.clientY);
+        return;
+      }
+      setLayout((prev) => {
+        const next: WorkspaceDockLayout = JSON.parse(JSON.stringify(prev));
+        const columns = [next.leftColumn, next.rightInnerColumn, next.rightOuterColumn, next.bottomRow];
+        const source = columns.flat().find(g => g.id === drag.sourceGroupId);
+        const target = columns.flat().find(g => g.id === targetGroupId);
+        if (!source || !target || !source.tabs.includes(drag.panelId)) return prev;
+        if (source === target && targetTabId === drag.panelId) return prev;
+        source.tabs = source.tabs.filter(t => t !== drag.panelId);
+        if (source.activeTab === drag.panelId) source.activeTab = source.tabs[0] || '';
+        const index = targetTabId ? target.tabs.indexOf(targetTabId) : -1;
+        target.tabs.splice(index < 0 ? target.tabs.length : index, 0, drag.panelId);
+        target.activeTab = drag.panelId;
+        target.minimized = false;
+        for (const col of columns) {
+          for (let i = col.length - 1; i >= 0; i--) if (!col[i].tabs.length) col.splice(i, 1);
+        }
+        return next;
+      });
     };
-
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
   };
@@ -506,10 +584,20 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
     const startY = e.clientY;
     const origX = win.x;
     const origY = win.y;
+    let moved = false;
+    const destinationAt = (x: number, y: number): DockColumn | null => {
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-dock-destination]'))) {
+        const rect = el.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return el.dataset.dockDestination as DockColumn;
+      }
+      return null;
+    };
 
     const onMove = (mv: PointerEvent) => {
       const dx = mv.clientX - startX;
       const dy = mv.clientY - startY;
+      if (Math.hypot(dx, dy) > 8) moved = true;
+      if (moved) { setDraggingPanel(true); setDropDestination(destinationAt(mv.clientX, mv.clientY)); }
       setLayout((prev) => ({
         ...prev,
         floatingWindows: prev.floatingWindows.map((w) =>
@@ -524,7 +612,11 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
       }));
     };
 
-    const onUp = () => {
+    const onUp = (event: PointerEvent) => {
+      const destination = moved ? destinationAt(event.clientX, event.clientY) : null;
+      setDraggingPanel(false);
+      setDropDestination(null);
+      if (destination) dockFloatingWindowBack(floatId, destination);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
@@ -535,14 +627,17 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
 
   const renderTabGroupCard = (
     grp: DockTabGroup,
-    columnKey: 'rightOuterColumn' | 'rightInnerColumn'
+    columnKey: DockColumn
   ) => {
     const isMinimized = Boolean(grp.minimized);
     return (
       <div
         key={grp.id}
         className="ai-panel-shell"
+        data-dock-group={grp.id}
         style={{
+          outline: dropGroupId === grp.id ? '2px solid var(--ai-accent-blue)' : undefined,
+          outlineOffset: -2,
           flex: isMinimized ? '0 0 25px' : `${grp.heightWeight ?? 1} 1 0%`,
           minHeight: isMinimized ? 25 : 120,
           borderLeft: 'none',
@@ -566,9 +661,11 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
                   key={tabId}
                   type="button"
                   className={`ai-panel-tab ${isActive ? 'active' : ''}`}
-                  title={`${getPanelTitle(tabId)} (Drag out to float, Double-click to collapse)`}
+                  data-dock-tab={tabId}
+                  title={`${getPanelTitle(tabId)} (Drag to reorder, move or float; double-click to collapse)`}
                   onPointerDown={(e) => handleTabPointerDown(tabId, grp.id, e)}
                   onClick={() => {
+                    if (suppressTabClickRef.current) { suppressTabClickRef.current = false; return; }
                     setLayout((prev) => ({
                       ...prev,
                       [columnKey]: prev[columnKey].map((g) =>
@@ -591,8 +688,15 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
             })}
           </div>
 
-          {/* Right Action Icons: Tear-Off Float & Minimize */}
+          {/* Right Action Icons: move without dragging, float, and minimize */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 1, paddingRight: 2 }}>
+            <select aria-label={`Move ${getPanelTitle(grp.activeTab)} panel`} title="Move panel to a dock" value=""
+              onChange={(event) => { if (event.target.value) moveTabToColumn(grp.activeTab, grp.id, event.target.value as DockColumn); }}
+              className="ai-panel-move-select">
+              <option value="">⇆</option>
+              {([['leftColumn', 'Left'], ['rightInnerColumn', 'Right inner'], ['rightOuterColumn', 'Right outer'], ['bottomRow', 'Bottom']] as const)
+                .filter(([id]) => id !== columnKey).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
             <button
               type="button"
               className="ai-icon-btn"
@@ -804,6 +908,8 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
           <div
             style={{
               width: rightInnerWidth,
+              maxWidth: '32vw',
+              overflowY: 'auto',
               height: '100%',
               backgroundColor: 'var(--ai-bg-panel)',
               borderLeft: '1px solid var(--ai-border-strong)',
@@ -873,6 +979,8 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
           <div
             style={{
               width: rightOuterWidth,
+              maxWidth: '32vw',
+              overflowY: 'auto',
               height: '100%',
               backgroundColor: 'var(--ai-bg-panel)',
               borderLeft: '1px solid var(--ai-border-strong)',
@@ -940,6 +1048,13 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
         <div
           key={win.id}
           className="ai-panel-shell"
+          onPointerDownCapture={() => setFrontWindowId(win.id)}
+          onPointerUpCapture={(event) => {
+            if (win.minimized) return;
+            const { width, height } = event.currentTarget.getBoundingClientRect();
+            if (width < 220 || height < 160 || (Math.abs(width - win.width) < 1 && Math.abs(height - win.height) < 1)) return;
+            setLayout(previous => ({ ...previous, floatingWindows: previous.floatingWindows.map(item => item.id === win.id ? { ...item, width, height } : item) }));
+          }}
           style={{
             position: 'fixed',
             left: win.x,
@@ -948,7 +1063,12 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
             height: win.minimized ? 26 : win.height,
             boxShadow: 'var(--ai-shadow-floating)',
             borderRadius: 2,
-            zIndex: 960,
+            zIndex: frontWindowId === win.id ? 962 : 960,
+            resize: win.minimized ? 'none' : 'both',
+            minWidth: 220,
+            minHeight: win.minimized ? 26 : 160,
+            maxWidth: 'calc(100vw - 20px)',
+            maxHeight: 'calc(100vh - 30px)',
           }}
         >
           {/* Floating Window Draggable Title Bar */}
@@ -966,15 +1086,14 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
               style={{ display: 'flex', alignItems: 'center', gap: 2, paddingRight: 3 }}
               onPointerDown={(e) => e.stopPropagation()}
             >
-              <button
-                type="button"
-                className="ai-icon-btn"
-                title="Dock Panel Back to Right Dock"
-                onClick={() => dockFloatingWindowBack(win.id, 'rightOuter')}
-                style={{ width: 18, height: 18, fontSize: 10 }}
-              >
-                ⇥
-              </button>
+              <select aria-label={`Dock ${getPanelTitle(win.activeTab)} panel`} title="Dock panel" value=""
+                className="ai-panel-move-select" onChange={event => {
+                  if (event.target.value) dockFloatingWindowBack(win.id, event.target.value as DockColumn);
+                }}>
+                <option value="">⇥</option>
+                <option value="leftColumn">Left</option><option value="bottomRow">Bottom</option>
+                <option value="rightInnerColumn">Right inner</option><option value="rightOuterColumn">Right outer</option>
+              </select>
               <button
                 type="button"
                 className="ai-icon-btn"
@@ -1020,9 +1139,20 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
 
   if (children) {
     return (
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
-        <div style={{ flex: 1, overflow: 'hidden', position: 'relative', display: 'flex' }}>
-          {children}
+      <div className="ai-workspace-docks">
+        {layout.leftColumn.length > 0 && <div className="ai-left-panel-column" aria-label="Left dock">
+          {layout.leftColumn.map(group => renderTabGroupCard(group, 'leftColumn'))}
+        </div>}
+        <div className="ai-workspace-center">
+          <div className="ai-workspace-canvas">{children}
+            {draggingPanel && <>
+              <div data-dock-destination="leftColumn" className={`ai-dock-drop ai-dock-drop-left ${dropDestination === 'leftColumn' ? 'active' : ''}`}>Dock left</div>
+              <div data-dock-destination="bottomRow" className={`ai-dock-drop ai-dock-drop-bottom ${dropDestination === 'bottomRow' ? 'active' : ''}`}>Dock bottom</div>
+            </>}
+          </div>
+          {layout.bottomRow.length > 0 && <div className="ai-bottom-panel-row" aria-label="Bottom dock">
+            {layout.bottomRow.map(group => renderTabGroupCard(group, 'bottomRow'))}
+          </div>}
         </div>
         {dockContent}
       </div>

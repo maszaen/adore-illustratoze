@@ -14,6 +14,22 @@ interface FloatingToolPalette {
   vertical: boolean;
 }
 
+const TOOLBAR_STORAGE_KEY = 'adore.toolbar.v1';
+interface ToolbarPreferences { columns: 1 | 2; position: { x: number; y: number } | null; order: string[] }
+const defaultOrder = TOOL_GROUPS.map(group => group.id);
+function readToolbarPreferences(): ToolbarPreferences {
+  const defaults: ToolbarPreferences = { columns: 2, position: null, order: defaultOrder };
+  try {
+    const data = JSON.parse(localStorage.getItem(TOOLBAR_STORAGE_KEY) || 'null');
+    if (!data || !Array.isArray(data.order)) return defaults;
+    const known = data.order.filter((id: unknown): id is string => typeof id === 'string' && defaultOrder.includes(id));
+    const order = [...new Set<string>(known), ...defaultOrder.filter(id => !known.includes(id))];
+    const position = data.position && Number.isFinite(data.position.x) && Number.isFinite(data.position.y)
+      ? { x: Math.max(0, Math.min(data.position.x, window.innerWidth - 64)), y: Math.max(0, Math.min(data.position.y, window.innerHeight - 50)) } : null;
+    return { columns: data.columns === 1 ? 1 : 2, position, order };
+  } catch { return defaults; }
+}
+
 export const LeftToolbar: React.FC = () => {
   const store = useStudioStore() as any;
 
@@ -23,9 +39,17 @@ export const LeftToolbar: React.FC = () => {
   const screenMode: ScreenMode = store.screenMode || 'normal';
   const hideAllPanels: boolean = Boolean(store.hideAllPanels);
 
-  const [columns, setColumns] = useState<1 | 2>(() =>
-    store.toolbarColumns === 1 ? 1 : 2
-  );
+  const initialPrefs = useRef(readToolbarPreferences());
+  const [columns, setColumns] = useState<1 | 2>(initialPrefs.current.columns);
+  const [toolOrder, setToolOrder] = useState<string[]>(initialPrefs.current.order);
+  const [customizing, setCustomizing] = useState(false);
+  const draggedGroup = useRef<string | null>(null);
+  const orderedGroups = toolOrder.map(id => TOOL_GROUPS.find(group => group.id === id)).filter((group): group is ToolGroup => Boolean(group));
+  const moveGroup = (from: string, to: string) => setToolOrder(previous => {
+    const source = previous.indexOf(from), target = previous.indexOf(to);
+    if (source < 0 || target < 0 || source === target) return previous;
+    const next = [...previous]; next.splice(source, 1); next.splice(target, 0, from); return next;
+  });
   const [groupActiveTool, setGroupActiveTool] = useState<Record<string, ToolId>>(() => {
     const initial: Record<string, ToolId> = {};
     for (const grp of TOOL_GROUPS) {
@@ -45,6 +69,31 @@ export const LeftToolbar: React.FC = () => {
   const [screenModeMenuOpen, setScreenModeMenuOpen] = useState(false);
 
   const longPressTimerRef = useRef<number | null>(null);
+  const didLongPressRef = useRef(false);
+  const [toolbarPosition, setToolbarPosition] = useState<{ x: number; y: number } | null>(initialPrefs.current.position);
+  useEffect(() => {
+    try { localStorage.setItem(TOOLBAR_STORAGE_KEY, JSON.stringify({ columns, position: toolbarPosition, order: toolOrder })); } catch { /* Storage is optional. */ }
+  }, [columns, toolbarPosition, toolOrder]);
+  useEffect(() => {
+    const clamp = () => setToolbarPosition(pos => pos ? { x: Math.max(0, Math.min(pos.x, window.innerWidth - 64)), y: Math.max(0, Math.min(pos.y, window.innerHeight - 50)) } : null);
+    window.addEventListener('resize', clamp);
+    return () => window.removeEventListener('resize', clamp);
+  }, []);
+  const dragToolbar = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0 || !toolbarRef.current) return;
+    e.preventDefault();
+    const rect = toolbarRef.current.getBoundingClientRect();
+    const startX = e.clientX, startY = e.clientY;
+    const move = (event: PointerEvent) => {
+      setToolbarPosition({
+        x: Math.max(0, Math.min(window.innerWidth - rect.width, rect.left + event.clientX - startX)),
+        y: Math.max(0, Math.min(window.innerHeight - Math.min(rect.height, 60), rect.top + event.clientY - startY)),
+      });
+    };
+    const end = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+  };
   const toolbarRef = useRef<HTMLDivElement>(null);
 
   // Sync activeTool to its group's displayed icon
@@ -59,6 +108,21 @@ export const LeftToolbar: React.FC = () => {
       }
     }
   }, [activeTool]);
+
+  useEffect(() => {
+    const reset = (event: Event) => {
+      if ((event as CustomEvent).detail?.reset) {
+        setToolbarPosition(null);
+        setTornOffPalettes([]);
+        setColumns(2);
+        setToolOrder(defaultOrder);
+        setCustomizing(false);
+        store.setToolbarColumns?.(2);
+      }
+    };
+    window.addEventListener('ai-workspace-preset', reset);
+    return () => window.removeEventListener('ai-workspace-preset', reset);
+  }, []);
 
   // Close flyouts when clicking outside
   useEffect(() => {
@@ -122,8 +186,8 @@ export const LeftToolbar: React.FC = () => {
     const rect = buttonEl.getBoundingClientRect();
     setOpenFlyout({
       groupId: grp.id,
-      top: rect.top,
-      left: rect.right + 3,
+      top: Math.max(4, Math.min(rect.top, window.innerHeight - Math.min(grp.tools.length * 25 + 6, window.innerHeight - 8) - 4)),
+      left: Math.max(4, Math.min(rect.right + 3, window.innerWidth - 230)),
     });
   };
 
@@ -137,8 +201,8 @@ export const LeftToolbar: React.FC = () => {
           groupId: grp.id,
           label: grp.label,
           tools: grp.tools,
-          x: (openFlyout?.left ?? 80) + 20,
-          y: Math.max(68, openFlyout?.top ?? 120),
+          x: Math.max(0, Math.min((openFlyout?.left ?? 80) + 20, window.innerWidth - Math.min(window.innerWidth, grp.tools.length * 28 + 40))),
+          y: Math.max(0, Math.min(openFlyout?.top ?? 120, window.innerHeight - 40)),
           vertical: false,
         },
       ];
@@ -161,7 +225,7 @@ export const LeftToolbar: React.FC = () => {
       setTornOffPalettes((prev) =>
         prev.map((p) =>
           p.groupId === groupId
-            ? { ...p, x: Math.max(4, origX + dx), y: Math.max(30, origY + dy) }
+            ? { ...p, x: Math.max(0, Math.min(window.innerWidth - 50, origX + dx)), y: Math.max(0, Math.min(window.innerHeight - 40, origY + dy)) }
             : p
         )
       );
@@ -185,7 +249,7 @@ export const LeftToolbar: React.FC = () => {
       <aside
         ref={toolbarRef}
         className={`ai-left-toolbar ${columns === 2 ? 'cols-2' : 'cols-1'}`}
-        style={{ position: 'relative', userSelect: 'none' }}
+        style={toolbarPosition ? { position: 'fixed', left: toolbarPosition.x, top: toolbarPosition.y, maxHeight: 'calc(100vh - 30px)', zIndex: 950, boxShadow: 'var(--ai-shadow-floating)', userSelect: 'none' } : { position: 'relative', userSelect: 'none' }}
       >
         {/* Top Bar: 1-Col / 2-Col Collapse Toggle (<< / >>) */}
         <div
@@ -200,14 +264,10 @@ export const LeftToolbar: React.FC = () => {
             borderBottom: '1px solid var(--ai-border-strong)',
           }}
         >
-          <span
-            style={{
-              width: 10,
-              height: 3,
-              borderTop: '1px dotted var(--ai-text-muted)',
-              borderBottom: '1px dotted var(--ai-text-muted)',
-            }}
-          />
+          <button type="button" onPointerDown={dragToolbar} onDoubleClick={() => setToolbarPosition(null)}
+            title="Drag to move toolbar; double-click to dock" aria-label="Move toolbar; double-click to dock"
+            style={{ width: 20, height: 15, border: 0, background: 'transparent', color: 'var(--ai-text-secondary)', cursor: 'move', padding: 0 }}>⠿</button>
+          {toolbarPosition && <button type="button" title="Dock toolbar" aria-label="Dock toolbar" onClick={() => setToolbarPosition(null)} style={{ border: 0, background: 'transparent', color: 'var(--ai-text-primary)', cursor: 'pointer' }}>⇥</button>}
           <button
             type="button"
             onClick={toggleColumns}
@@ -227,9 +287,15 @@ export const LeftToolbar: React.FC = () => {
           </button>
         </div>
 
+        <button type="button" className="ai-toolbar-customize" aria-pressed={customizing}
+          title="Customize tool order" onClick={() => setCustomizing(value => !value)}>
+          {customizing ? 'Done' : 'Edit'}
+        </button>
+        {customizing && <span className="ai-toolbar-hint" title="Drag tools or use arrow keys to reorder">↕</span>}
+
         {/* Tool Buttons Grid */}
         <div className="ai-tool-grid">
-          {TOOL_GROUPS.map((grp) => {
+          {orderedGroups.map((grp) => {
             const currentToolId = groupActiveTool[grp.id] || grp.defaultToolId;
             const currentTool =
               grp.tools.find((t) => t.id === currentToolId) || grp.tools[0];
@@ -246,8 +312,23 @@ export const LeftToolbar: React.FC = () => {
                 key={grp.id}
                 type="button"
                 className={`ai-tool-btn ${isGroupSelected ? 'active' : ''}`}
-                title={toolTitle}
+                title={customizing ? `${toolTitle} — drag or use arrow keys to reorder` : toolTitle}
+                draggable={customizing}
+                aria-label={toolTitle}
+                onDragStart={(e) => { if (!customizing) return; draggedGroup.current = grp.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', grp.id); }}
+                onDragOver={(e) => { if (customizing && draggedGroup.current) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } }}
+                onDrop={(e) => { e.preventDefault(); if (draggedGroup.current) moveGroup(draggedGroup.current, grp.id); draggedGroup.current = null; }}
+                onDragEnd={() => { draggedGroup.current = null; }}
+                onKeyDown={(e) => {
+                  if (!customizing || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+                  e.preventDefault();
+                  const index = toolOrder.indexOf(grp.id);
+                  const delta = e.key === 'ArrowUp' ? -columns : e.key === 'ArrowDown' ? columns : e.key === 'ArrowLeft' ? -1 : 1;
+                  const target = toolOrder[index + delta]; if (target) moveGroup(grp.id, target);
+                }}
                 onClick={(e) => {
+                  if (customizing) { e.stopPropagation(); return; }
+                  if (didLongPressRef.current) { didLongPressRef.current = false; e.stopPropagation(); return; }
                   if (openFlyout?.groupId === grp.id) {
                     setOpenFlyout(null);
                   } else {
@@ -257,12 +338,15 @@ export const LeftToolbar: React.FC = () => {
                 }}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  openGroupFlyout(grp, e.currentTarget);
+                  if (!customizing) openGroupFlyout(grp, e.currentTarget);
                 }}
                 onPointerDown={(e) => {
+                  didLongPressRef.current = false;
+                  if (customizing) return;
                   if (hasSubTools && e.button === 0) {
                     const targetEl = e.currentTarget;
                     longPressTimerRef.current = window.setTimeout(() => {
+                      didLongPressRef.current = true;
                       openGroupFlyout(grp, targetEl);
                     }, 320);
                   }
@@ -292,7 +376,7 @@ export const LeftToolbar: React.FC = () => {
                     onClick={(e) => {
                       e.stopPropagation();
                       const btn = e.currentTarget.parentElement;
-                      if (btn) openGroupFlyout(grp, btn);
+                      if (btn && !customizing) openGroupFlyout(grp, btn);
                     }}
                   />
                 )}
@@ -479,7 +563,9 @@ export const LeftToolbar: React.FC = () => {
               display: 'flex',
               alignItems: 'stretch',
               zIndex: 1200,
-              overflow: 'hidden',
+              maxHeight: 'calc(100vh - 8px)',
+              maxWidth: 'calc(100vw - 8px)',
+              overflowY: 'auto',
             }}
           >
             <div style={{ display: 'flex', flexDirection: 'column', padding: '2px 0' }}>
@@ -578,6 +664,9 @@ export const LeftToolbar: React.FC = () => {
             display: 'flex',
             flexDirection: palette.vertical ? 'column' : 'row',
             alignItems: 'stretch',
+            maxWidth: 'calc(100vw - 8px)',
+            maxHeight: 'calc(100vh - 8px)',
+            overflow: 'auto',
             userSelect: 'none',
           }}
         >

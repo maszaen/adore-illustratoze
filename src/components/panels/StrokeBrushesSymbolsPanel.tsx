@@ -22,6 +22,7 @@ import type {
 
 export interface StrokeBrushesSymbolsPanelProps {
   initialTab?: 'stroke' | 'brushes' | 'symbols';
+  showTabs?: boolean;
 }
 
 export const WIDTH_PROFILES: { id: string; name: string; svgD: string }[] = [
@@ -101,6 +102,7 @@ export const DEFAULT_SYMBOLS: SymbolItem[] = [
 
 export const StrokeBrushesSymbolsPanel: React.FC<StrokeBrushesSymbolsPanelProps> = ({
   initialTab = 'stroke',
+  showTabs = true,
 }) => {
   const store = useStudioStore() as any;
   const doc = store.document || store.activeDocument || { nodes: {}, brushes: [], symbols: [] };
@@ -335,6 +337,7 @@ export const StrokeBrushesSymbolsPanel: React.FC<StrokeBrushesSymbolsPanelProps>
   return (
     <div className="flex flex-col h-full bg-[#323232] text-[#e8e8e8] select-none text-[11px]">
       {/* Sub-Tabs: Stroke (Ctrl+F10) | Brushes (F5) | Symbols (Shift+Ctrl+F11) */}
+      {showTabs && (
       <div className="flex items-center bg-[#262626] border-b border-[#1a1a1a]">
         {(['stroke', 'brushes', 'symbols'] as const).map((tab) => (
           <button
@@ -350,6 +353,7 @@ export const StrokeBrushesSymbolsPanel: React.FC<StrokeBrushesSymbolsPanelProps>
           </button>
         ))}
       </div>
+      )}
 
       {/* ====================================================================
           TAB 1: STROKE PANEL (Ctrl+F10)

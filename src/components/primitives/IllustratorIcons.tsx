@@ -1,4 +1,5 @@
 import React from 'react';
+import { Move, Shrink, ZoomIn, RotateCw, Palette, Sun, Wand2, BarChart3, BarChart4, BarChartHorizontal, LineChart, PieChart, Radar, MousePointer2 } from 'lucide-react';
 
 export interface IconProps {
   size?: number;
@@ -16,6 +17,16 @@ export const ToolIcon: React.FC<{
   size?: number;
 }> = ({ toolId, iconName, badge, size = 15 }) => {
   const id = toolId || iconName || 'select';
+  const distinctIcons: Record<string, React.ElementType> = {
+    'symbol-shifter': Move, 'symbol-scruncher': Shrink, 'symbol-sizer': ZoomIn,
+    'symbol-spinner': RotateCw, 'symbol-stainer': Palette, 'symbol-screener': Sun,
+    'symbol-styler': Wand2,
+    'column-graph': BarChart3, 'stacked-column-graph': BarChart4,
+    'bar-graph': BarChartHorizontal, 'line-graph': LineChart,
+    'pie-graph': PieChart, 'radar-graph': Radar, 'perspective-select': MousePointer2,
+  };
+  const DistinctIcon = distinctIcons[id];
+  if (DistinctIcon) return <DistinctIcon size={size} strokeWidth={1.5} aria-hidden="true" />;
 
   const renderSvg = () => {
     switch (id) {
@@ -286,6 +297,7 @@ export const ToolIcon: React.FC<{
           <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
             <path d="M9.5 2.5L14 7L7.5 13.5H3.5L1.8 11.8L9.5 2.5Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
             <path d="M6 6L10.5 10.5M2 13.5H13.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+            {id === 'path-eraser' && <path d="M1 3C4 1 6 4 8 3" stroke="var(--ai-accent-blue)" strokeWidth="1.2" strokeDasharray="2 1" />}
           </svg>
         );
 
