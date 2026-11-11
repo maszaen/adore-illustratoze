@@ -27,6 +27,7 @@ import type {
 
 export interface PathfinderAlignPanelProps {
   initialTab?: 'pathfinder' | 'align' | 'transform';
+  showTabs?: boolean;
 }
 
 type RefPointIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
@@ -45,6 +46,7 @@ const REF_OFFSETS: { rx: number; ry: number; label: string }[] = [
 
 export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
   initialTab = 'pathfinder',
+  showTabs = true,
 }) => {
   const store = useStudioStore() as any;
   const doc = store.document || store.activeDocument || { nodes: {}, layers: [], artboards: [] };
@@ -526,6 +528,7 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
   return (
     <div className="flex flex-col h-full bg-[#323232] text-[#e8e8e8] select-none text-[11px]">
       {/* Sub-Tabs: Pathfinder | Align | Transform */}
+      {showTabs && (
       <div className="flex items-center bg-[#262626] border-b border-[#1a1a1a]">
         {(['pathfinder', 'align', 'transform'] as const).map((tab) => (
           <button
@@ -541,6 +544,7 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
           </button>
         ))}
       </div>
+      )}
 
       {/* TAB 1: PATHFINDER (Shift+Ctrl+F9) */}
       {activeTab === 'pathfinder' && (

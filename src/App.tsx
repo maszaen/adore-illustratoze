@@ -500,21 +500,9 @@ export const App: React.FC = () => {
           >
             <LeftToolbar />
 
-            <div
-              style={{
-                flex: 1,
-                display: 'flex',
-                position: 'relative',
-                overflow: 'hidden',
-                minWidth: 0,
-                minHeight: 0,
-                backgroundColor: 'var(--ai-bg-pasteboard)',
-              }}
-            >
+            <DockManager renderPanel={renderStudioPanel}>
               <StudioCanvas />
-            </div>
-
-            <DockManager renderPanel={renderStudioPanel} />
+            </DockManager>
           </div>
 
           {/* Bottom Status Bar */}

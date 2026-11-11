@@ -1,5 +1,6 @@
 import React from 'react';
 import { LayersPanel } from './LayersPanel';
+import { PropertiesPanel } from './PropertiesPanel';
 import { AppearancePanel } from './AppearancePanel';
 import { PathfinderAlignPanel } from './PathfinderAlignPanel';
 import { ColorSwatchesGradientPanel } from './ColorSwatchesGradientPanel';
@@ -56,58 +57,59 @@ export function renderStudioPanel(panelId: string): React.ReactNode {
       return <LayersPanel key="layers" />;
 
     case 'appearance':
-      return <AppearancePanel key="appearance" initialTab="appearance" />;
+      return <AppearancePanel key="appearance" showTabs={false} initialTab="appearance" />;
     case 'graphic-styles':
-      return <AppearancePanel key="graphic-styles" initialTab="graphic-styles" />;
+      return <AppearancePanel key="graphic-styles" showTabs={false} initialTab="graphic-styles" />;
 
     case 'pathfinder':
-      return <PathfinderAlignPanel key="pathfinder" initialTab="pathfinder" />;
+      return <PathfinderAlignPanel key="pathfinder" showTabs={false} initialTab="pathfinder" />;
     case 'align':
-      return <PathfinderAlignPanel key="align" initialTab="align" />;
+      return <PathfinderAlignPanel key="align" showTabs={false} initialTab="align" />;
     case 'transform':
-      return <PathfinderAlignPanel key="transform" initialTab="transform" />;
+      return <PathfinderAlignPanel key="transform" showTabs={false} initialTab="transform" />;
 
     case 'color':
-      return <ColorSwatchesGradientPanel key="color" initialTab="color" />;
+      return <ColorSwatchesGradientPanel key="color" showTabs={false} initialTab="color" />;
     case 'color-guide':
-      return <ColorSwatchesGradientPanel key="color-guide" initialTab="color-guide" />;
+      return <ColorSwatchesGradientPanel key="color-guide" showTabs={false} initialTab="color-guide" />;
     case 'swatches':
-      return <ColorSwatchesGradientPanel key="swatches" initialTab="swatches" />;
+      return <ColorSwatchesGradientPanel key="swatches" showTabs={false} initialTab="swatches" />;
     case 'gradient':
-      return <ColorSwatchesGradientPanel key="gradient" initialTab="gradient" />;
+      return <ColorSwatchesGradientPanel key="gradient" showTabs={false} initialTab="gradient" />;
 
     case 'stroke':
-      return <StrokeBrushesSymbolsPanel key="stroke" initialTab="stroke" />;
+      return <StrokeBrushesSymbolsPanel key="stroke" showTabs={false} initialTab="stroke" />;
     case 'brushes':
-      return <StrokeBrushesSymbolsPanel key="brushes" initialTab="brushes" />;
+      return <StrokeBrushesSymbolsPanel key="brushes" showTabs={false} initialTab="brushes" />;
     case 'symbols':
-      return <StrokeBrushesSymbolsPanel key="symbols" initialTab="symbols" />;
+      return <StrokeBrushesSymbolsPanel key="symbols" showTabs={false} initialTab="symbols" />;
 
     case 'character':
-      return <TypographyPanel key="character" initialTab="character" />;
+      return <TypographyPanel key="character" showTabs={false} initialTab="character" />;
     case 'paragraph':
-      return <TypographyPanel key="paragraph" initialTab="paragraph" />;
+      return <TypographyPanel key="paragraph" showTabs={false} initialTab="paragraph" />;
     case 'opentype':
-      return <TypographyPanel key="opentype" initialTab="opentype" />;
+      return <TypographyPanel key="opentype" showTabs={false} initialTab="opentype" />;
 
     case 'artboards':
-      return <ArtboardsAssetHistoryInfoPanel key="artboards" initialTab="artboards" />;
+      return <ArtboardsAssetHistoryInfoPanel key="artboards" showTabs={false} initialTab="artboards" />;
     case 'asset-export':
-      return <ArtboardsAssetHistoryInfoPanel key="asset-export" initialTab="asset-export" />;
+      return <ArtboardsAssetHistoryInfoPanel key="asset-export" showTabs={false} initialTab="asset-export" />;
     case 'transparency':
-      return <ArtboardsAssetHistoryInfoPanel key="transparency" initialTab="transparency" />;
+      return <ArtboardsAssetHistoryInfoPanel key="transparency" showTabs={false} initialTab="transparency" />;
     case 'image-trace':
-      return <ArtboardsAssetHistoryInfoPanel key="image-trace" initialTab="image-trace" />;
+      return <ArtboardsAssetHistoryInfoPanel key="image-trace" showTabs={false} initialTab="image-trace" />;
     case 'info':
-      return <ArtboardsAssetHistoryInfoPanel key="info" initialTab="info" />;
+      return <ArtboardsAssetHistoryInfoPanel key="info" showTabs={false} initialTab="info" />;
     case 'history':
-      return <ArtboardsAssetHistoryInfoPanel key="history" initialTab="history" />;
+      return <ArtboardsAssetHistoryInfoPanel key="history" showTabs={false} initialTab="history" />;
     case 'magic-wand':
-      return <ArtboardsAssetHistoryInfoPanel key="magic-wand" initialTab="magic-wand" />;
+      return <ArtboardsAssetHistoryInfoPanel key="magic-wand" showTabs={false} initialTab="magic-wand" />;
 
     case 'properties':
+      return <PropertiesPanel key="properties" />;
     default:
-      return <ArtboardsAssetHistoryInfoPanel key={panelId || 'properties'} initialTab="properties" />;
+      return <div className="ai-properties-panel">Panel not available: {panelId}</div>;
   }
 }
 

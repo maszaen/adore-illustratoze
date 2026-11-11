@@ -442,6 +442,24 @@ const initialHistoryEntry: HistoryEntry = {
   snapshot: cloneDoc(initialDoc),
 };
 
+const WORKSPACE_PREFERENCE_KEY = 'adore.activeWorkspace.v1';
+function getInitialWorkspace(): string {
+  try {
+    const saved = localStorage.getItem(WORKSPACE_PREFERENCE_KEY);
+    if (saved && ['essentials', 'essentials-classic', 'illustration', 'typography', 'layout-print', 'tracing', 'web'].includes(saved)) return saved;
+  } catch { /* Storage is optional. */ }
+  return 'essentials-classic';
+}
+
+const UI_THEME_PREFERENCE_KEY = 'adore.uiTheme.v1';
+function getInitialTheme(): UIThemeBrightness {
+  try {
+    const saved = localStorage.getItem(UI_THEME_PREFERENCE_KEY);
+    if (saved === 'dark' || saved === 'medium-dark' || saved === 'medium-light' || saved === 'light') return saved;
+  } catch { /* Storage is optional. */ }
+  return 'dark';
+}
+
 export const useStudioStore = create<StudioStoreState>((set, get) => ({
   documents: { [initialDoc.id]: initialDoc },
   activeDocumentId: initialDoc.id,
@@ -501,7 +519,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
   moveArtworkWithArtboard: true,
   toolbarColumns: 2,
 
-  activeWorkspace: 'essentials-classic',
+  activeWorkspace: getInitialWorkspace(),
   customWorkspaces: [],
   openPanels: {
     properties: true,
@@ -515,7 +533,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     artboards: true,
     history: true,
   },
-  uiBrightness: 'dark',
+  uiBrightness: getInitialTheme(),
   pasteboardMatchUI: true,
   language: 'en',
   activeModal: null,
@@ -1291,12 +1309,10 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
   setMoveArtworkWithArtboard: (val) => set({ moveArtworkWithArtboard: val }),
   setToolbarColumns: (cols) => set({ toolbarColumns: cols }),
 
-  setActiveWorkspace: (ws) =>
-    set({
-      activeWorkspace: ws,
-      hideAllPanels: false,
-      statusMessage: `Workspace: ${ws}`,
-    }),
+  setActiveWorkspace: (ws) => {
+    try { localStorage.setItem(WORKSPACE_PREFERENCE_KEY, ws); } catch { /* Storage is optional. */ }
+    set({ activeWorkspace: ws, hideAllPanels: false, statusMessage: `Workspace: ${ws}` });
+  },
 
   saveCustomWorkspace: (name) =>
     set((s) => ({
@@ -1333,6 +1349,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     })),
 
   setUIBrightness: (brightness) => {
+    try { localStorage.setItem(UI_THEME_PREFERENCE_KEY, brightness); } catch { /* Storage is optional. */ }
     if (typeof document !== 'undefined') {
       document.documentElement.setAttribute('data-theme', brightness);
     }

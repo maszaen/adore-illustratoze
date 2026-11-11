@@ -52,6 +52,7 @@ export type MultiUtilityTabId =
 
 export interface ArtboardsAssetHistoryInfoPanelProps {
   initialTab?: MultiUtilityTabId;
+  showTabs?: boolean;
 }
 
 const ARTBOARD_SIZE_PRESETS: { label: string; w: number; h: number }[] = [
@@ -65,7 +66,7 @@ const ARTBOARD_SIZE_PRESETS: { label: string; w: number; h: number }[] = [
 
 export const ArtboardsAssetHistoryInfoPanel: React.FC<
   ArtboardsAssetHistoryInfoPanelProps
-> = ({ initialTab = 'artboards' }) => {
+> = ({ initialTab = 'artboards', showTabs = true }) => {
   const store = useStudioStore() as any;
   const doc = store.document || store.activeDocument || {
     artboards: [],
@@ -426,6 +427,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
   return (
     <div className="flex flex-col h-full bg-[#323232] text-[#e8e8e8] select-none text-[11px]">
       {/* Multi-Panel Sub-Tabs Bar */}
+      {showTabs && (
       <div className="flex items-center bg-[#262626] border-b border-[#1a1a1a] overflow-x-auto">
         {[
           { id: 'artboards' as const, label: 'Artboards' },
@@ -449,6 +451,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
           </button>
         ))}
       </div>
+      )}
 
       {/* ====================================================================
           TAB 1: ARTBOARDS PANEL
@@ -1192,7 +1195,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
             </div>
             <div>
               <span className="text-[#888]">Y: </span>
-              <span>{Math.round((primaryNode?.height ? primaryNode.y : store.cursorY ?? 0) * 10) / 10} {unit}</span>
+              <span>{Math.round((primaryNode ? primaryNode.y : store.cursorY ?? 0) * 10) / 10} {unit}</span>
             </div>
             <div>
               <span className="text-[#888]">H: </span>

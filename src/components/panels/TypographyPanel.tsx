@@ -25,6 +25,7 @@ import type { TextStyle, VectorNode } from '../../core/types';
 
 export interface TypographyPanelProps {
   initialTab?: 'character' | 'paragraph' | 'opentype';
+  showTabs?: boolean;
 }
 
 export const BUILT_IN_FONTS = [
@@ -83,6 +84,7 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
 
 export const TypographyPanel: React.FC<TypographyPanelProps> = ({
   initialTab = 'character',
+  showTabs = true,
 }) => {
   const store = useStudioStore() as any;
   const doc = store.document || store.activeDocument || { nodes: {}, layers: [] };
@@ -288,6 +290,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
   return (
     <div className="flex flex-col h-full bg-[#323232] text-[#e8e8e8] select-none text-[11px]">
       {/* Sub-Tabs: Character (Ctrl+T) | Paragraph (Alt+Ctrl+T) | OpenType */}
+      {showTabs && (
       <div className="flex items-center bg-[#262626] border-b border-[#1a1a1a]">
         {[
           { id: 'character' as const, label: 'Character' },
@@ -307,6 +310,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
           </button>
         ))}
       </div>
+      )}
 
       {/* ====================================================================
           TAB 1: CHARACTER PANEL (Ctrl+T)

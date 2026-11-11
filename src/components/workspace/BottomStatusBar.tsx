@@ -93,7 +93,7 @@ export const BottomStatusBar: React.FC = () => {
   const zoomPercentText = `${Math.round(zoom * 10000) / 100}%`;
 
   return (
-    <footer
+    <footer className="ai-statusbar"
       style={{
         height: 22,
         backgroundColor: 'var(--ai-bg-statusbar)',
@@ -110,16 +110,16 @@ export const BottomStatusBar: React.FC = () => {
       }}
     >
       {/* Left Cluster: Zoom Selector + Artboard Navigation */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="ai-statusbar-left" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {/* Zoom Level Dropdown */}
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
           <select
             className="ai-select"
             title="Zoom Level (3.13% – 64000%)"
             value={
-              ZOOM_PRESETS.some((p) => Math.abs(p.value - zoom) < 0.002)
+              ZOOM_PRESETS.some((p) => Math.abs(p.value - zoom) < 0.000001)
                 ? String(
-                    ZOOM_PRESETS.find((p) => Math.abs(p.value - zoom) < 0.002)?.value
+                    ZOOM_PRESETS.find((p) => Math.abs(p.value - zoom) < 0.000001)?.value
                   )
                 : 'custom'
             }
@@ -143,7 +143,7 @@ export const BottomStatusBar: React.FC = () => {
               fontVariantNumeric: 'tabular-nums',
             }}
           >
-            {!ZOOM_PRESETS.some((p) => Math.abs(p.value - zoom) < 0.002) && (
+            {!ZOOM_PRESETS.some((p) => Math.abs(p.value - zoom) < 0.000001) && (
               <option value="custom">{zoomPercentText}</option>
             )}
             <option value="fit">Fit Screen</option>
@@ -228,7 +228,7 @@ export const BottomStatusBar: React.FC = () => {
         <span style={{ color: 'var(--ai-border-subtle)' }}>|</span>
 
         {/* Active Tool Status */}
-        <div
+        <div className="ai-statusbar-tool"
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -248,20 +248,20 @@ export const BottomStatusBar: React.FC = () => {
 
       {/* Center / Contextual Warning or Status Message */}
       {statusMessage && (
-        <div
+        <div className="ai-statusbar-message" title={statusMessage}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
             padding: '1px 8px',
             borderRadius: 2,
-            backgroundColor: 'rgba(245, 166, 35, 0.16)',
-            border: '1px solid rgba(245, 166, 35, 0.45)',
-            color: 'var(--ai-warning-amber)',
+            backgroundColor: 'var(--ai-bg-panel)',
+            border: '1px solid var(--ai-border-subtle)',
+            color: 'var(--ai-text-secondary)',
             fontSize: 10.5,
           }}
         >
-          <span>⚠ {statusMessage}</span>
+          <span>{statusMessage}</span>
           <button
             type="button"
             onClick={() => {
@@ -286,7 +286,7 @@ export const BottomStatusBar: React.FC = () => {
       )}
 
       {/* Right Cluster: Selection Info, View Mode, Document Color Mode & Undo/Redo Status */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div className="ai-statusbar-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <span>
           {selectedIds.length === 0
             ? language === 'id'
@@ -306,7 +306,7 @@ export const BottomStatusBar: React.FC = () => {
         <span style={{ color: 'var(--ai-border-subtle)' }}>|</span>
 
         <span style={{ textTransform: 'uppercase', fontSize: 10 }}>
-          {viewMode === 'outline' ? 'Outline (Ctrl+Y)' : 'GPU Preview'}
+          {viewMode === 'outline' ? 'Outline (Ctrl+Y)' : 'Preview'}
         </span>
 
         <span style={{ color: 'var(--ai-border-subtle)' }}>|</span>

@@ -373,9 +373,10 @@ export const DEFAULT_GRAPHIC_STYLES: GraphicStyleItem[] = [
 
 export interface AppearancePanelProps {
   initialTab?: 'appearance' | 'graphic-styles';
+  showTabs?: boolean;
 }
 
-export const AppearancePanel: React.FC<AppearancePanelProps> = ({ initialTab = 'appearance' }) => {
+export const AppearancePanel: React.FC<AppearancePanelProps> = ({ initialTab = 'appearance', showTabs = true }) => {
   const store = useStudioStore() as any;
   const doc = store.document || store.activeDocument || { nodes: {}, layers: [], graphicStyles: [] };
   const unit = doc.unit || 'pt';
@@ -774,6 +775,7 @@ export const AppearancePanel: React.FC<AppearancePanelProps> = ({ initialTab = '
   return (
     <div className="flex flex-col h-full bg-[#323232] text-[#e8e8e8] select-none text-[11px]">
       {/* Sub-Tabs: Appearance (Shift+F6) & Graphic Styles (Shift+F5) */}
+      {showTabs && (
       <div className="flex items-center bg-[#262626] border-b border-[#1a1a1a]">
         <button
           onClick={() => setActiveTab('appearance')}
@@ -796,6 +798,7 @@ export const AppearancePanel: React.FC<AppearancePanelProps> = ({ initialTab = '
           Graphic Styles
         </button>
       </div>
+      )}
 
       {activeTab === 'appearance' ? (
         <>

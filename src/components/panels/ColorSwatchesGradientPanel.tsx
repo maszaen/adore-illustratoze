@@ -39,6 +39,7 @@ import type {
 
 export interface ColorSwatchesGradientPanelProps {
   initialTab?: 'color' | 'color-guide' | 'swatches' | 'gradient';
+  showTabs?: boolean;
 }
 
 type ColorSpaceMode = 'RGB' | 'CMYK' | 'HSB' | 'Grayscale' | 'WebSafe';
@@ -104,6 +105,7 @@ export const DEFAULT_SWATCHES: SwatchItem[] = [
 
 export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProps> = ({
   initialTab = 'color',
+  showTabs = true,
 }) => {
   const store = useStudioStore() as any;
   const doc = store.document || store.activeDocument || { nodes: {}, swatches: [] };
@@ -317,6 +319,7 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
   return (
     <div className="flex flex-col h-full bg-[#323232] text-[#e8e8e8] select-none text-[11px]">
       {/* Sub-Tabs: Color (F6) | Guide (Shift+F3) | Swatches | Gradient (Ctrl+F9) */}
+      {showTabs && (
       <div className="flex items-center bg-[#262626] border-b border-[#1a1a1a] overflow-x-auto">
         {[
           { id: 'color' as const, label: 'Color' },
@@ -337,6 +340,7 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
           </button>
         ))}
       </div>
+      )}
 
       {/* ====================================================================
           TAB 1: COLOR PANEL (F6)
@@ -650,7 +654,8 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
                 });
                 return next;
               });
-              setActiveTab('swatches');
+              if (showTabs) setActiveTab('swatches');
+              else window.dispatchEvent(new CustomEvent('ai-open-panel', { detail: { panelId: 'swatches' } }));
             }}
             className="ai-btn w-full text-[10px]"
           >

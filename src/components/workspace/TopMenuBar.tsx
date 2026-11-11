@@ -21,7 +21,8 @@ export const STUDIO_PANEL_LIST = [
   { id: 'properties', label: 'Properties', shortcut: '' },
   { id: 'layers', label: 'Layers', shortcut: 'F7' },
   { id: 'appearance', label: 'Appearance', shortcut: 'Shift+F6' },
-  { id: 'color', label: 'Color & Color Guide', shortcut: 'F6' },
+  { id: 'color', label: 'Color', shortcut: 'F6' },
+  { id: 'color-guide', label: 'Color Guide', shortcut: 'Shift+F3' },
   { id: 'swatches', label: 'Swatches', shortcut: '' },
   { id: 'gradient', label: 'Gradient', shortcut: 'Ctrl+F9' },
   { id: 'stroke', label: 'Stroke', shortcut: 'Ctrl+F10' },
@@ -32,7 +33,11 @@ export const STUDIO_PANEL_LIST = [
   { id: 'brushes', label: 'Brushes', shortcut: 'F5' },
   { id: 'symbols', label: 'Symbols', shortcut: 'Shift+Ctrl+F11' },
   { id: 'graphic-styles', label: 'Graphic Styles', shortcut: 'Shift+F5' },
-  { id: 'character', label: 'Character & Paragraph', shortcut: 'Ctrl+T' },
+  { id: 'character', label: 'Character', shortcut: 'Ctrl+T' },
+  { id: 'paragraph', label: 'Paragraph', shortcut: 'Alt+Ctrl+T' },
+  { id: 'opentype', label: 'OpenType', shortcut: 'Alt+Shift+Ctrl+T' },
+  { id: 'info', label: 'Info', shortcut: 'F8' },
+  { id: 'magic-wand', label: 'Magic Wand', shortcut: '' },
   { id: 'artboards', label: 'Artboards', shortcut: '' },
   { id: 'image-trace', label: 'Image Trace', shortcut: '' },
   { id: 'asset-export', label: 'Asset Export', shortcut: '' },
@@ -192,11 +197,8 @@ export const TopMenuBar: React.FC = () => {
     if (wsId === 'reset') {
       if (typeof store.resetWorkspace === 'function') {
         store.resetWorkspace();
-      } else {
-        window.dispatchEvent(
-          new CustomEvent('ai-workspace-preset', { detail: { preset: activeWorkspace, reset: true } })
-        );
       }
+      window.dispatchEvent(new CustomEvent('ai-workspace-preset', { detail: { preset: activeWorkspace, reset: true } }));
       return;
     }
     if (typeof store.setActiveWorkspace === 'function') {
@@ -1034,7 +1036,7 @@ export const TopMenuBar: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {/* GPU Preview Badge */}
           <span
-            title="Hardware Accelerated Vector Engine (60fps)"
+            title="Current view mode"
             style={{
               fontSize: 10,
               padding: '1px 5px',
@@ -1044,7 +1046,7 @@ export const TopMenuBar: React.FC = () => {
               color: 'var(--ai-text-secondary)',
             }}
           >
-            🚀 {viewMode === 'outline' ? 'Outline' : 'GPU Preview'}
+            {viewMode === 'outline' ? 'Outline' : 'Preview'}
           </span>
 
           {/* Language Switcher (ID / EN) */}
@@ -1141,7 +1143,7 @@ export const TopMenuBar: React.FC = () => {
       </header>
 
       {/* Row 2: Document Tabs Bar + Isolation Mode Breadcrumb */}
-      <div className="ai-doctabs-bar">
+      <div className="ai-doctabs-bar" role="tablist" aria-label="Open documents">
         {documents.map((d: any, index: number) => {
           const docId = d.id || `doc-${index}`;
           const isActive = docId === activeDocumentId || documents.length === 1;
@@ -1150,6 +1152,18 @@ export const TopMenuBar: React.FC = () => {
             <div
               key={docId}
               className={`ai-doctab ${isActive ? 'active' : ''}`}
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              title={d.name || 'Untitled-1'}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                  e.preventDefault();
+                  const next = (index + (e.key === 'ArrowRight' ? 1 : -1) + documents.length) % documents.length;
+                  store.switchDocument(documents[next].id);
+                  (e.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[next] as HTMLElement | undefined)?.focus();
+                }
+              }}
               onClick={() => {
                 if (typeof store.switchDocument === 'function') {
                   store.switchDocument(docId);
@@ -1158,18 +1172,16 @@ export const TopMenuBar: React.FC = () => {
                 }
               }}
             >
-              <span>
-                {d.name || 'Untitled-1'}.adloze @ {zoomPct}% ({d.colorMode || 'RGB'}/
-                {viewMode === 'outline' ? 'Outline' : 'GPU Preview'})
-              </span>
+              <span className="ai-doctab-name">{d.name || 'Untitled-1'}</span>
+              {isActive && <span className="ai-doctab-meta">{zoomPct}% · {d.colorMode || 'RGB'}</span>}
               {documents.length > 1 && (
                 <button
                   type="button"
                   title="Close Document Tab"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (typeof store.closeDocumentTab === 'function') {
-                      store.closeDocumentTab(docId);
+                    if (window.confirm(`Close "${d.name || 'Untitled'}"? Make sure your work is saved locally or exported first.`)) {
+                      store.closeDocument(docId);
                     }
                   }}
                   style={{

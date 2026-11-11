@@ -80,7 +80,7 @@ import {
   traceImageNodeToVectorNodes,
   type ImageTracePresetId,
 } from '../../core/io/imageTrace';
-import { saveCustomPresetToDb, saveProjectToDb } from '../../core/io/db';
+import { saveCustomPresetToDb, saveProjectToDb, listCustomPresetsFromDb, type CustomDocumentPreset } from '../../core/io/db';
 
 const DEFAULT_SHORTCUT_BINDINGS = [
   { id: 'sc-select', category: 'Tools', label: 'Selection Tool', key: 'V' },
@@ -134,6 +134,15 @@ export const StudioModals: React.FC = () => {
     store.document || store.activeDocument || createDefaultDocument();
   const selectedIds: string[] = store.selectedIds || store.selectedNodeIds || [];
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!activeModal) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const first = dialogRef.current?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])');
+    (first || dialogRef.current)?.focus();
+    return () => { if (previouslyFocused?.isConnected) previouslyFocused.focus(); };
+  }, [activeModal]);
+
   const closeModal = () => {
     if (typeof store.setActiveModal === 'function') {
       store.setActiveModal(null);
@@ -173,6 +182,11 @@ export const StudioModals: React.FC = () => {
   // --- 1. NEW DOCUMENT MODAL STATE ---
   const [newDocCat, setNewDocCat] = useState<'saved' | 'mobile' | 'web' | 'print' | 'film' | 'art'>('web');
   const [newDocName, setNewDocName] = useState('Untitled-1');
+  const [savedPresets, setSavedPresets] = useState<CustomDocumentPreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeModal === 'new-document') listCustomPresetsFromDb().then(setSavedPresets).catch(() => setSavedPresets([]));
+  }, [activeModal]);
   const [newDocW, setNewDocW] = useState(1920);
   const [newDocH, setNewDocH] = useState(1080);
   const [newDocUnit, setNewDocUnit] = useState<UnitType>('px');
@@ -379,6 +393,7 @@ export const StudioModals: React.FC = () => {
   if (!activeModal) return null;
 
   const applySelectedPreset = (preset: DocumentPresetItem) => {
+    setSelectedPresetId(preset.id);
     setNewDocW(preset.width);
     setNewDocH(preset.height);
     setNewDocUnit(preset.unit);
@@ -438,6 +453,27 @@ export const StudioModals: React.FC = () => {
   return (
     <div
       className="ai-modal-backdrop"
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={activeModal.replace(/-/g, ' ')}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        // Do not let editor shortcuts operate behind an open modal.
+        event.stopPropagation();
+        if (event.key === 'Escape' && !event.defaultPrevented) {
+          event.preventDefault();
+          closeModal();
+        } else if (event.key === 'Tab') {
+          const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+            .filter(element => element.getClientRects().length > 0);
+          if (!controls.length) { event.preventDefault(); event.currentTarget.focus(); return; }
+          const current = document.activeElement;
+          const first = controls[0], last = controls[controls.length - 1];
+          if (event.shiftKey && (current === first || !event.currentTarget.contains(current))) { event.preventDefault(); last.focus(); }
+          else if (!event.shiftKey && (current === last || !event.currentTarget.contains(current))) { event.preventDefault(); first.focus(); }
+        }
+      }}
       onClick={(e) => {
         if (e.target === e.currentTarget) closeModal();
       }}
@@ -451,29 +487,29 @@ export const StudioModals: React.FC = () => {
         justifyContent: 'center',
         fontFamily: 'Inter, Segoe UI, system-ui, sans-serif',
         fontSize: 12,
-        color: '#e8e8e8',
+        color: 'var(--ai-text-primary)',
       }}
     >
       {/* ====================================================================
           1. NEW DOCUMENT MODAL
          ==================================================================== */}
       {activeModal === 'new-document' && (
-        <div style={{ ...modalBoxStyle, width: 780 }}>
+        <div className="ai-new-document" style={{ ...modalBoxStyle, width: 780 }}>
           <div style={modalHeaderStyle}>
             <span>New Document</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
 
           {/* Preset Categories */}
-          <div
+          <div className="ai-new-document-categories"
             style={{
               display: 'flex',
               gap: 6,
               padding: '10px 18px',
-              background: '#262626',
-              borderBottom: '1px solid #1a1a1a',
+              background: 'var(--ai-bg-panel-header)',
+              borderBottom: '1px solid var(--ai-border-subtle)',
             }}
           >
             {(['saved', 'mobile', 'web', 'print', 'film', 'art'] as const).map((cat) => (
@@ -485,7 +521,7 @@ export const StudioModals: React.FC = () => {
                   borderRadius: 4,
                   border: 'none',
                   background: newDocCat === cat ? '#1473e6' : 'transparent',
-                  color: newDocCat === cat ? '#ffffff' : '#b8b8b8',
+                  color: newDocCat === cat ? '#ffffff' : 'var(--ai-text-secondary)',
                   fontWeight: newDocCat === cat ? 600 : 400,
                   textTransform: 'capitalize',
                   cursor: 'pointer',
@@ -496,9 +532,9 @@ export const StudioModals: React.FC = () => {
             ))}
           </div>
 
-          <div style={{ display: 'flex', padding: 18, gap: 18 }}>
+          <div className="ai-new-document-content" style={{ display: 'flex', padding: 18, gap: 18 }}>
             {/* Left: Preset Cards */}
-            <div
+            <div className="ai-new-document-presets"
               style={{
                 flex: 1,
                 display: 'grid',
@@ -509,26 +545,38 @@ export const StudioModals: React.FC = () => {
                 alignContent: 'start',
               }}
             >
-              {DOCUMENT_PRESETS.filter((p) => newDocCat === 'saved' || p.category === newDocCat).map(
+              {newDocCat === 'saved' && savedPresets.length === 0 && <div style={{ color: 'var(--ai-text-secondary)', gridColumn: '1 / -1' }}>No saved presets yet.</div>}
+              {newDocCat === 'saved' && savedPresets.map((preset) => (
+                <button key={preset.id} type="button" onClick={() => {
+                  setSelectedPresetId(preset.id);
+                  setNewDocName(preset.name); setNewDocW(preset.width); setNewDocH(preset.height);
+                  setNewDocUnit(preset.unit); setNewDocColorMode(preset.colorMode); setNewDocPpi(preset.rasterPpi);
+                  setNewDocArtboards(preset.artboards); setNewDocOrientation(preset.orientation);
+                  setNewDocBleedTop(preset.bleedTop); setNewDocBleedBottom(preset.bleedBottom);
+                  setNewDocBleedLeft(preset.bleedLeft); setNewDocBleedRight(preset.bleedRight);
+                }} style={{ background: 'var(--ai-bg-panel-header)', color: 'var(--ai-text-primary)', textAlign: 'left', border: selectedPresetId === preset.id ? '1px solid #1473e6' : '1px solid var(--ai-border-subtle)', borderRadius: 6, padding: 12, cursor: 'pointer' }}>
+                  <div style={{ fontWeight: 600 }}>{preset.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 4 }}>{preset.width} × {preset.height} {preset.unit} · {preset.colorMode} ({preset.rasterPpi} ppi)</div>
+                </button>
+              ))}
+              {DOCUMENT_PRESETS.filter((p) => p.category === newDocCat).map(
                 (preset) => (
                   <div
                     key={preset.id}
                     onClick={() => applySelectedPreset(preset)}
                     style={{
-                      background: '#262626',
+                      background: 'var(--ai-bg-panel-header)',
                       border:
-                        newDocW === preset.width &&
-                        newDocH === preset.height &&
-                        newDocUnit === preset.unit
+                        selectedPresetId === preset.id
                           ? '1.5px solid #1473e6'
-                          : '1px solid #3f3f3f',
+                          : '1px solid var(--ai-border-subtle)',
                       borderRadius: 6,
                       padding: 12,
                       cursor: 'pointer',
                     }}
                   >
-                    <div style={{ fontWeight: 600, color: '#ffffff' }}>{preset.name}</div>
-                    <div style={{ fontSize: 11, color: '#9e9e9e', marginTop: 4 }}>
+                    <div style={{ fontWeight: 600, color: 'var(--ai-text-primary)' }}>{preset.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 4 }}>
                       {preset.width} × {preset.height} {preset.unit} • {preset.colorMode} ({preset.ppi}{' '}
                       ppi)
                     </div>
@@ -538,11 +586,11 @@ export const StudioModals: React.FC = () => {
             </div>
 
             {/* Right: Preset Details Inspector */}
-            <div
+            <div className="ai-new-document-details"
               style={{
                 width: 280,
-                background: '#262626',
-                border: '1px solid #383838',
+                background: 'var(--ai-bg-panel-header)',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 padding: 14,
                 display: 'flex',
@@ -550,7 +598,7 @@ export const StudioModals: React.FC = () => {
                 gap: 10,
               }}
             >
-              <div style={{ fontWeight: 700, fontSize: 12, color: '#ffffff' }}>PRESET DETAILS</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--ai-text-primary)' }}>PRESET DETAILS</div>
 
               <div>
                 <label style={labelStyle}>Document Title</label>
@@ -612,7 +660,8 @@ export const StudioModals: React.FC = () => {
                       }}
                       style={{
                         ...smallToggleBtn,
-                        background: newDocOrientation === 'portrait' ? '#1473e6' : '#383838',
+                        background: newDocOrientation === 'portrait' ? '#1473e6' : 'var(--ai-bg-hover)',
+                        color: newDocOrientation === 'portrait' ? '#ffffff' : 'var(--ai-text-primary)',
                       }}
                     >
                       Port
@@ -627,7 +676,8 @@ export const StudioModals: React.FC = () => {
                       }}
                       style={{
                         ...smallToggleBtn,
-                        background: newDocOrientation === 'landscape' ? '#1473e6' : '#383838',
+                        background: newDocOrientation === 'landscape' ? '#1473e6' : 'var(--ai-bg-hover)',
+                        color: newDocOrientation === 'landscape' ? '#ffffff' : 'var(--ai-text-primary)',
                       }}
                     >
                       Land
@@ -674,7 +724,7 @@ export const StudioModals: React.FC = () => {
                     ] as const
                   ).map(([lbl, val, setter]) => (
                     <div key={lbl}>
-                      <div style={{ fontSize: 9, color: '#888' }}>{lbl}</div>
+                      <div style={{ fontSize: 9, color: 'var(--ai-text-secondary)' }}>{lbl}</div>
                       <input
                         type="number"
                         step="0.5"
@@ -744,6 +794,7 @@ export const StudioModals: React.FC = () => {
                     rasterPpi: newDocPpi,
                     createdAt: Date.now(),
                   });
+                  setSavedPresets(await listCustomPresetsFromDb());
                   setNewDocCat('saved');
                 }}
                 style={{ ...secondaryBtnStyle, width: '100%' }}
@@ -773,7 +824,7 @@ export const StudioModals: React.FC = () => {
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Sparkles size={14} color="#ff9a00" /> Recolor Artwork
             </span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -831,7 +882,7 @@ export const StudioModals: React.FC = () => {
               {/* Harmony Rotation & Brightness Sliders */}
               <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 11, color: '#b8b8b8' }}>Harmony Hue Shift ({hueDelta}°)</span>
+                  <span style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>Harmony Hue Shift ({hueDelta}°)</span>
                   <button
                     onClick={() => setLinkHarmony(!linkHarmony)}
                     style={{
@@ -841,9 +892,9 @@ export const StudioModals: React.FC = () => {
                       fontSize: 10,
                       padding: '3px 7px',
                       borderRadius: 4,
-                      border: '1px solid #4f4f4f',
-                      background: linkHarmony ? '#1473e6' : '#323232',
-                      color: '#fff',
+                      border: '1px solid var(--ai-border-subtle)',
+                      background: linkHarmony ? '#1473e6' : 'var(--ai-bg-panel)',
+                      color: linkHarmony ? '#ffffff' : 'var(--ai-text-primary)',
                       cursor: 'pointer',
                     }}
                   >
@@ -872,7 +923,7 @@ export const StudioModals: React.FC = () => {
                 />
 
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 11, color: '#b8b8b8' }}>Brightness</span>
+                  <span style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>Brightness</span>
                   <span style={{ fontSize: 11 }}>{Math.round(brightMult * 100)}%</span>
                 </div>
                 <input
@@ -952,7 +1003,7 @@ export const StudioModals: React.FC = () => {
               <div
                 style={{
                   background: '#222222',
-                  border: '1px solid #383838',
+                  border: '1px solid var(--ai-border-subtle)',
                   borderRadius: 6,
                   maxHeight: 240,
                   overflowY: 'auto',
@@ -970,7 +1021,7 @@ export const StudioModals: React.FC = () => {
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       padding: '4px 8px',
-                      background: '#2b2b2b',
+                      background: 'var(--ai-bg-panel-header)',
                       borderRadius: 4,
                     }}
                   >
@@ -986,7 +1037,7 @@ export const StudioModals: React.FC = () => {
                       />
                       <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{row.from}</span>
                     </div>
-                    <span style={{ color: '#888' }}>→</span>
+                    <span style={{ color: 'var(--ai-text-secondary)' }}>→</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <input
                         type="color"
@@ -1058,12 +1109,12 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 720 }}>
           <div style={modalHeaderStyle}>
             <span>Export for Screens (Alt+Ctrl+E)</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
 
-          <div style={{ display: 'flex', borderBottom: '1px solid #1a1a1a', background: '#262626' }}>
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--ai-border-subtle)', background: 'var(--ai-bg-panel-header)' }}>
             {(['artboards', 'assets'] as const).map((tab) => (
               <button
                 key={tab}
@@ -1073,7 +1124,7 @@ export const StudioModals: React.FC = () => {
                   border: 'none',
                   borderBottom: exportTab === tab ? '2px solid #1473e6' : '2px solid transparent',
                   background: 'transparent',
-                  color: exportTab === tab ? '#ffffff' : '#9e9e9e',
+                  color: exportTab === tab ? 'var(--ai-text-primary)' : 'var(--ai-text-secondary)',
                   fontWeight: 600,
                   cursor: 'pointer',
                   textTransform: 'capitalize',
@@ -1091,8 +1142,8 @@ export const StudioModals: React.FC = () => {
             <div
               style={{
                 flex: 1,
-                background: '#242424',
-                border: '1px solid #383838',
+                background: 'var(--ai-bg-elevated)',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 padding: 12,
                 maxHeight: 290,
@@ -1112,7 +1163,7 @@ export const StudioModals: React.FC = () => {
                           justifyContent: 'space-between',
                           padding: '8px 10px',
                           background: checked ? '#2c394b' : '#2d2d2d',
-                          border: checked ? '1px solid #1473e6' : '1px solid #3a3a3a',
+                          border: checked ? '1px solid #1473e6' : '1px solid var(--ai-border-subtle)',
                           borderRadius: 5,
                           cursor: 'pointer',
                         }}
@@ -1131,11 +1182,11 @@ export const StudioModals: React.FC = () => {
                               }
                             }}
                           />
-                          <span style={{ fontWeight: 600, color: '#ffffff' }}>
+                          <span style={{ fontWeight: 600, color: 'var(--ai-text-primary)' }}>
                             {idx + 1}. {ab.name}
                           </span>
                         </div>
-                        <span style={{ fontSize: 11, color: '#9e9e9e' }}>
+                        <span style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>
                           {Math.round(ab.width)} × {Math.round(ab.height)} pt
                         </span>
                       </label>
@@ -1150,7 +1201,7 @@ export const StudioModals: React.FC = () => {
                       style={{
                         padding: '8px 10px',
                         background: '#2d2d2d',
-                        border: '1px solid #3a3a3a',
+                        border: '1px solid var(--ai-border-subtle)',
                         borderRadius: 5,
                         display: 'flex',
                         justifyContent: 'space-between',
@@ -1179,7 +1230,7 @@ export const StudioModals: React.FC = () => {
                     </div>
                   ))}
                   {(doc.exportAssets?.length || 0) === 0 && (doc.slices?.length || 0) === 0 && (
-                    <div style={{ color: '#9e9e9e', textAlign: 'center', padding: 24 }}>
+                    <div style={{ color: 'var(--ai-text-secondary)', textAlign: 'center', padding: 24 }}>
                       No custom slices or assets yet. Selected objects or active artboard will be
                       exported.
                     </div>
@@ -1192,8 +1243,8 @@ export const StudioModals: React.FC = () => {
             <div
               style={{
                 width: 310,
-                background: '#242424',
-                border: '1px solid #383838',
+                background: 'var(--ai-bg-elevated)',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 padding: 12,
                 display: 'flex',
@@ -1282,7 +1333,7 @@ export const StudioModals: React.FC = () => {
                     style={{
                       background: 'transparent',
                       border: 'none',
-                      color: '#888',
+                      color: 'var(--ai-text-secondary)',
                       cursor: 'pointer',
                     }}
                   >
@@ -1343,7 +1394,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 760 }}>
           <div style={modalHeaderStyle}>
             <span>Save for Web (Legacy) (Alt+Shift+Ctrl+S)</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -1354,7 +1405,7 @@ export const StudioModals: React.FC = () => {
               <div
                 style={{
                   background: '#1a1a1a',
-                  border: '1px solid #383838',
+                  border: '1px solid var(--ai-border-subtle)',
                   borderRadius: 6,
                   padding: 10,
                   display: 'flex',
@@ -1362,7 +1413,7 @@ export const StudioModals: React.FC = () => {
                   gap: 6,
                 }}
               >
-                <div style={{ fontSize: 10, color: '#9e9e9e', fontWeight: 600 }}>
+                <div style={{ fontSize: 10, color: 'var(--ai-text-secondary)', fontWeight: 600 }}>
                   ORIGINAL VECTOR SOURCE
                 </div>
                 <div
@@ -1385,7 +1436,7 @@ export const StudioModals: React.FC = () => {
                     style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
                   />
                 </div>
-                <div style={{ fontSize: 10, color: '#b8b8b8' }}>
+                <div style={{ fontSize: 10, color: 'var(--ai-text-secondary)' }}>
                   {doc.name} • {Object.keys(doc.nodes || {}).length} vector objects
                 </div>
               </div>
@@ -1426,7 +1477,7 @@ export const StudioModals: React.FC = () => {
                     style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
                   />
                 </div>
-                <div style={{ fontSize: 10, color: '#b8b8b8' }}>
+                <div style={{ fontSize: 10, color: 'var(--ai-text-secondary)' }}>
                   Scale: {webScalePct}% • Est. Size: ~{Math.max(4, Math.round((webQuality * webScalePct) / 180))} KB
                 </div>
               </div>
@@ -1436,8 +1487,8 @@ export const StudioModals: React.FC = () => {
             <div
               style={{
                 width: 240,
-                background: '#262626',
-                border: '1px solid #383838',
+                background: 'var(--ai-bg-panel-header)',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 padding: 12,
                 display: 'flex',
@@ -1572,7 +1623,7 @@ export const StudioModals: React.FC = () => {
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Printer size={14} color="#ff9a00" /> Save Adobe PDF (Print-Ready Vector)
             </span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -1580,8 +1631,8 @@ export const StudioModals: React.FC = () => {
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div
               style={{
-                background: '#262626',
-                border: '1px solid #383838',
+                background: 'var(--ai-bg-panel-header)',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 padding: 12,
                 display: 'flex',
@@ -1589,7 +1640,7 @@ export const StudioModals: React.FC = () => {
                 gap: 8,
               }}
             >
-              <div style={{ fontWeight: 700, color: '#ffffff' }}>Printer's Marks</div>
+              <div style={{ fontWeight: 700, color: 'var(--ai-text-primary)' }}>Printer's Marks</div>
               <label style={checkboxRowStyle}>
                 <input
                   type="checkbox"
@@ -1626,8 +1677,8 @@ export const StudioModals: React.FC = () => {
 
             <div
               style={{
-                background: '#262626',
-                border: '1px solid #383838',
+                background: 'var(--ai-bg-panel-header)',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 padding: 12,
                 display: 'flex',
@@ -1635,7 +1686,7 @@ export const StudioModals: React.FC = () => {
                 gap: 8,
               }}
             >
-              <div style={{ fontWeight: 700, color: '#ffffff' }}>Bleeds</div>
+              <div style={{ fontWeight: 700, color: 'var(--ai-text-primary)' }}>Bleeds</div>
               <label style={checkboxRowStyle}>
                 <input
                   type="checkbox"
@@ -1703,7 +1754,7 @@ export const StudioModals: React.FC = () => {
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <FileCode size={14} color="#1473e6" /> SVG Options
             </span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -1782,7 +1833,7 @@ export const StudioModals: React.FC = () => {
             {showSvgCode && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 11, color: '#9e9e9e' }}>Generated SVG Code</span>
+                  <span style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>Generated SVG Code</span>
                   <button
                     onClick={() => {
                       navigator.clipboard?.writeText(liveSvgCode);
@@ -1807,7 +1858,7 @@ export const StudioModals: React.FC = () => {
                   style={{
                     height: 160,
                     background: '#181818',
-                    border: '1px solid #383838',
+                    border: '1px solid var(--ai-border-subtle)',
                     borderRadius: 4,
                     color: '#80cbc4',
                     fontFamily: 'monospace',
@@ -1853,7 +1904,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 460 }}>
           <div style={modalHeaderStyle}>
             <span>Transform Each (Alt+Shift+Ctrl+D)</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -2013,7 +2064,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 380 }}>
           <div style={modalHeaderStyle}>
             <span>Offset Path</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -2075,7 +2126,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 400 }}>
           <div style={modalHeaderStyle}>
             <span>Simplify Path</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -2141,7 +2192,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 420 }}>
           <div style={modalHeaderStyle}>
             <span>Split Into Grid</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -2216,7 +2267,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 380 }}>
           <div style={modalHeaderStyle}>
             <span>Blend Options</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -2281,7 +2332,7 @@ export const StudioModals: React.FC = () => {
             <span>
               {activeModal === 'envelope-warp' ? 'Envelope Warp Options' : 'Envelope Mesh Options'}
             </span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -2432,7 +2483,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 520 }}>
           <div style={modalHeaderStyle}>
             <span>Pattern Options (Pattern Editing Mode)</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -2497,7 +2548,7 @@ export const StudioModals: React.FC = () => {
               style={{
                 width: 190,
                 background: '#1a1a1a',
-                border: '1px solid #383838',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 display: 'flex',
                 alignItems: 'center',
@@ -2596,7 +2647,7 @@ export const StudioModals: React.FC = () => {
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <BarChart3 size={14} color="#1473e6" /> Graph Data & Type Window
             </span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -2681,8 +2732,8 @@ export const StudioModals: React.FC = () => {
             {/* Spreadsheet Table */}
             <div
               style={{
-                background: '#1e1e1e',
-                border: '1px solid #383838',
+                background: 'var(--ai-bg-input)',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 overflowX: 'auto',
               }}
@@ -2690,9 +2741,9 @@ export const StudioModals: React.FC = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                 <thead>
                   <tr style={{ background: '#2a2a2a' }}>
-                    <th style={{ padding: 6, border: '1px solid #383838' }}>Category</th>
+                    <th style={{ padding: 6, border: '1px solid var(--ai-border-subtle)' }}>Category</th>
                     {graphSeries.map((ser, sIdx) => (
-                      <th key={sIdx} style={{ padding: 4, border: '1px solid #383838' }}>
+                      <th key={sIdx} style={{ padding: 4, border: '1px solid var(--ai-border-subtle)' }}>
                         <input
                           type="text"
                           value={ser}
@@ -2849,7 +2900,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 420 }}>
           <div style={modalHeaderStyle}>
             <span>Image Trace (Bitmap to Vector)</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -3041,7 +3092,7 @@ export const StudioModals: React.FC = () => {
         <div style={{ ...modalBoxStyle, width: 360 }}>
           <div style={modalHeaderStyle}>
             <span>Create Parametric Shape</span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -3189,7 +3240,7 @@ export const StudioModals: React.FC = () => {
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Sliders size={14} color="#1473e6" /> Preferences
             </span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -3227,7 +3278,7 @@ export const StudioModals: React.FC = () => {
                         borderRadius: 5,
                         border: active ? '2px solid #1473e6' : '1px solid #444',
                         background: '#222',
-                        color: '#e8e8e8',
+                        color: 'var(--ai-text-primary)',
                         display: 'flex',
                         flexDirection: 'column',
                         alignItems: 'center',
@@ -3314,7 +3365,7 @@ export const StudioModals: React.FC = () => {
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Keyboard size={14} color="#ff9a00" /> Keyboard Shortcuts (Alt+Shift+Ctrl+K)
             </span>
-            <button onClick={closeModal} style={closeBtnStyle}>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
             </button>
           </div>
@@ -3338,8 +3389,8 @@ export const StudioModals: React.FC = () => {
 
             <div
               style={{
-                background: '#202020',
-                border: '1px solid #383838',
+                background: 'var(--ai-bg-input)',
+                border: '1px solid var(--ai-border-subtle)',
                 borderRadius: 6,
                 maxHeight: 310,
                 overflowY: 'auto',
@@ -3347,7 +3398,7 @@ export const StudioModals: React.FC = () => {
             >
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                 <thead>
-                  <tr style={{ background: '#2b2b2b', color: '#9e9e9e', textAlign: 'left' }}>
+                  <tr style={{ background: 'var(--ai-bg-panel-header)', color: 'var(--ai-text-secondary)', textAlign: 'left' }}>
                     <th style={{ padding: '7px 12px' }}>Category</th>
                     <th style={{ padding: '7px 12px' }}>Command / Tool</th>
                     <th style={{ padding: '7px 12px' }}>Shortcut (Click to Edit)</th>
@@ -3363,7 +3414,7 @@ export const StudioModals: React.FC = () => {
                     )
                     .map((item) => (
                       <tr key={item.id} style={{ borderBottom: '1px solid #2c2c2c' }}>
-                        <td style={{ padding: '6px 12px', color: '#9e9e9e' }}>{item.category}</td>
+                        <td style={{ padding: '6px 12px', color: 'var(--ai-text-secondary)' }}>{item.category}</td>
                         <td style={{ padding: '6px 12px', fontWeight: 600 }}>{item.label}</td>
                         <td style={{ padding: '6px 12px' }}>
                           {editingShortcutId === item.id ? (
@@ -3390,7 +3441,7 @@ export const StudioModals: React.FC = () => {
                                 display: 'inline-block',
                                 padding: '2px 8px',
                                 borderRadius: 4,
-                                background: '#323232',
+                                background: 'var(--ai-bg-panel)',
                                 border: '1px solid #484848',
                                 fontFamily: 'monospace',
                                 cursor: 'pointer',
@@ -3419,33 +3470,35 @@ export const StudioModals: React.FC = () => {
 };
 
 const modalBoxStyle: React.CSSProperties = {
-  background: '#323232',
-  border: '1px solid #1a1a1a',
+  background: 'var(--ai-bg-panel)',
+  border: '1px solid var(--ai-border-subtle)',
   borderRadius: 6,
   boxShadow: '0 18px 48px rgba(0, 0, 0, 0.65)',
   overflow: 'hidden',
   display: 'flex',
   flexDirection: 'column',
   maxHeight: '90vh',
+  maxWidth: 'calc(100vw - 24px)',
+  overflowY: 'auto',
 };
 
 const modalHeaderStyle: React.CSSProperties = {
   height: 34,
   padding: '0 14px',
-  background: '#262626',
-  borderBottom: '1px solid #1a1a1a',
+  background: 'var(--ai-bg-panel-header)',
+  borderBottom: '1px solid var(--ai-border-subtle)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
   fontWeight: 600,
   fontSize: 12,
-  color: '#e8e8e8',
+  color: 'var(--ai-text-primary)',
 };
 
 const modalFooterStyle: React.CSSProperties = {
   padding: '10px 18px',
-  background: '#262626',
-  borderTop: '1px solid #1a1a1a',
+  background: 'var(--ai-bg-panel-header)',
+  borderTop: '1px solid var(--ai-border-subtle)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'flex-end',
@@ -3455,7 +3508,7 @@ const modalFooterStyle: React.CSSProperties = {
 const closeBtnStyle: React.CSSProperties = {
   background: 'transparent',
   border: 'none',
-  color: '#9e9e9e',
+  color: 'var(--ai-text-secondary)',
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
@@ -3464,7 +3517,7 @@ const closeBtnStyle: React.CSSProperties = {
 const labelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 11,
-  color: '#b8b8b8',
+  color: 'var(--ai-text-secondary)',
   marginBottom: 4,
 };
 
@@ -3473,9 +3526,9 @@ const fullInputStyle: React.CSSProperties = {
   height: 26,
   padding: '0 8px',
   borderRadius: 4,
-  background: '#1e1e1e',
-  border: '1px solid #454545',
-  color: '#e8e8e8',
+  background: 'var(--ai-bg-input)',
+  border: '1px solid var(--ai-border-subtle)',
+  color: 'var(--ai-text-primary)',
   fontSize: 11,
   boxSizing: 'border-box',
 };
@@ -3484,8 +3537,8 @@ const smallToggleBtn: React.CSSProperties = {
   flex: 1,
   height: 26,
   borderRadius: 4,
-  border: '1px solid #4a4a4a',
-  color: '#ffffff',
+  border: '1px solid var(--ai-border-subtle)',
+  color: 'var(--ai-text-primary)',
   fontSize: 10,
   cursor: 'pointer',
 };
@@ -3507,16 +3560,16 @@ const secondaryBtnStyle: React.CSSProperties = {
   padding: '0 14px',
   borderRadius: 14,
   background: 'transparent',
-  border: '1px solid #666666',
-  color: '#e8e8e8',
+  border: '1px solid var(--ai-border-subtle)',
+  color: 'var(--ai-text-primary)',
   fontWeight: 500,
   fontSize: 11,
   cursor: 'pointer',
 };
 
 const sectionBoxStyle: React.CSSProperties = {
-  background: '#262626',
-  border: '1px solid #3a3a3a',
+  background: 'var(--ai-bg-panel-header)',
+  border: '1px solid var(--ai-border-subtle)',
   borderRadius: 5,
   padding: 10,
   display: 'flex',
