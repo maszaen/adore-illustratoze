@@ -1,4 +1,5 @@
 import opentype from 'opentype.js';
+import { layoutText, textGlyphTransform } from '../math/textLayout';
 import type { AnchorPoint, VectorNode } from '../types';
 
 export interface LoadedCustomFont {
@@ -15,10 +16,28 @@ export interface OutlinedTextResult {
   childNodes: VectorNode[];
 }
 
+/** Why a text object could not be turned into outlines. Callers keep the live text in every case. */
+export class TextOutlineError extends Error {
+  constructor(public readonly reason: 'font-unavailable' | 'unsupported' | 'empty', message: string) {
+    super(message);
+    this.name = 'TextOutlineError';
+  }
+}
+
 const loadedFontsByFamily = new Map<string, LoadedCustomFont>();
+
+/** First family of a CSS font stack, unquoted and lower-cased: `"Inter", sans-serif` -> `inter`. */
+export function normalizeFontFamily(family: string | undefined): string {
+  return (family ?? '').split(',')[0].replace(/["']/g, '').trim().toLowerCase();
+}
 
 export function getLoadedCustomFonts(): LoadedCustomFont[] {
   return Array.from(loadedFontsByFamily.values());
+}
+
+/** The font file loaded for this text's family, if the user provided one. */
+export function findOutlineFont(textNode: VectorNode): LoadedCustomFont | undefined {
+  return loadedFontsByFamily.get(normalizeFontFamily(textNode.textStyle?.fontFamily));
 }
 
 /**
@@ -56,111 +75,112 @@ export async function loadCustomFontFile(file: File): Promise<LoadedCustomFont> 
     loadedAt: Date.now(),
   };
 
-  loadedFontsByFamily.set(rawFamily.toLowerCase(), record);
+  loadedFontsByFamily.set(normalizeFontFamily(rawFamily), record);
   return record;
 }
 
+/** Test/runtime hook for registering an already-parsed font. */
+export function registerOutlineFont(familyName: string, font: opentype.Font, styleName = 'Regular'): LoadedCustomFont {
+  const record: LoadedCustomFont = { id: `font-${familyName}`, familyName, styleName, fileName: `${familyName}.ttf`, font, loadedAt: Date.now() };
+  loadedFontsByFamily.set(normalizeFontFamily(familyName), record);
+  return record;
+}
+
+export function unregisterOutlineFont(familyName: string): void {
+  loadedFontsByFamily.delete(normalizeFontFamily(familyName));
+}
+
 /**
- * Converts a live Text VectorNode into a <Group> VectorNode and its child Bezier character
- * <Compound Path> VectorNodes (Adobe Illustrator Type > Create Outlines / Shift+Ctrl+O).
+ * Converts a live Text VectorNode into a <Group> of Bezier glyph <Compound Path>s
+ * (Adobe Illustrator Type > Create Outlines / Shift+Ctrl+O).
+ *
+ * Outlines come only from a real font file the user loaded (family must match). With no such font this
+ * throws instead of drawing look-alike letters, so artwork is never silently replaced. Line breaks,
+ * alignment, tracking, kerning, leading and the glyph transform follow the same layout as live text;
+ * the node rotation is baked into the geometry.
  */
-export function convertTextNodeToOutlineNodes(textNode: VectorNode): OutlinedTextResult {
-  const content = (textNode.textContent ?? 'Text').toString();
+export function convertTextNodeToOutlineNodes(textNode: VectorNode, idSuffix = 'outlines'): OutlinedTextResult {
   const style = textNode.textStyle;
-  const fontSize = Math.max(4, style?.fontSize ?? 36);
-  const trackingEm = (style?.tracking ?? 0) / 1000;
-  const leadingPx = style?.leading && style.leading > 0 ? style.leading : fontSize * 1.2;
-  const familyKey = (style?.fontFamily ?? '').toLowerCase().trim();
-  const customFont = loadedFontsByFamily.get(familyKey);
+  const content = textNode.textContent ?? '';
+  if (!content.trim()) throw new TextOutlineError('empty', 'This text object is empty, so there is nothing to outline.');
+  if (style?.vertical || style?.typeMode === 'path' || (style?.touchTransforms?.length ?? 0) > 0 ||
+      (style?.textCase && !['normal', 'uppercase'].includes(style.textCase))) {
+    throw new TextOutlineError('unsupported', 'Outlining vertical text, type on a path, touch-type edits and small-caps/superscript/subscript is not supported yet.');
+  }
+  const loaded = findOutlineFont(textNode);
+  if (!loaded) {
+    const family = style?.fontFamily?.split(',')[0]?.replace(/["']/g, '').trim() || 'this font';
+    throw new TextOutlineError('font-unavailable', `The font "${family}" is not loaded as a font file, so exact outlines are not possible. Upload it in the Typography panel (Upload font), then try again.`);
+  }
+  const font = loaded.font;
+  const tracking = style?.tracking ?? 0;
+  const measure = (text: string, size: number) => font.getAdvanceWidth(text, size, { kerning: true });
+  const layout = layoutText(textNode, measure);
+  const glyphTransform = textGlyphTransform(textNode);
+  const centre = { x: textNode.x + textNode.width / 2, y: textNode.y + textNode.height / 2 };
+  const angle = ((textNode.rotation || 0) * Math.PI) / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+  const place = (p: { x: number; y: number }) => {
+    const x = glyphTransform.sx * p.x + glyphTransform.tx, y = glyphTransform.sy * p.y + glyphTransform.ty;
+    if (!angle) return { x, y };
+    return { x: centre.x + (x - centre.x) * cos - (y - centre.y) * sin, y: centre.y + (x - centre.x) * sin + (y - centre.y) * cos };
+  };
 
-  const lines = content.split(/\r?\n/);
+  const groupId = `${textNode.id}-${idSuffix}`;
   const childNodes: VectorNode[] = [];
-  const baseX = textNode.x ?? 0;
-  const baseY = textNode.y ?? 0;
-  const groupId = `${textNode.id}-outlines`;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-
-  lines.forEach((line, lineIdx) => {
-    let cursorX = baseX;
-    const baselineY = baseY + fontSize * 0.82 + lineIdx * leadingPx;
-
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === ' ' || ch === '\t') {
-        cursorX += fontSize * (ch === '\t' ? 1.1 : 0.32) + fontSize * trackingEm;
-        continue;
-      }
-
-      let subpaths: AnchorPoint[][] = [];
-      let charAdvance = fontSize * 0.58;
-
-      if (customFont) {
-        const otPath = customFont.font.getPath(ch, cursorX, baselineY, fontSize);
-        subpaths = opentypeCommandsToContours(otPath.commands);
-        const advanceUnits =
-          customFont.font.charToGlyph(ch).advanceWidth || customFont.font.unitsPerEm * 0.6;
-        charAdvance = (advanceUnits / customFont.font.unitsPerEm) * fontSize;
-      } else {
-        const fallback = buildGeometricGlyphContours(ch, cursorX, baselineY - fontSize * 0.75, fontSize);
-        subpaths = fallback.contours;
-        charAdvance = fallback.advance;
-      }
-
-      const flatPoints = subpaths.flat();
-      if (flatPoints.length > 0) {
-        let cMinX = Infinity,
-          cMinY = Infinity,
-          cMaxX = -Infinity,
-          cMaxY = -Infinity;
-        for (const pt of flatPoints) {
-          if (pt.x < cMinX) cMinX = pt.x;
-          if (pt.y < cMinY) cMinY = pt.y;
-          if (pt.x > cMaxX) cMaxX = pt.x;
-          if (pt.y > cMaxY) cMaxY = pt.y;
+  layout.lines.forEach((line, lineIdx) => {
+    if (!line) return;
+    const lineWidth = font.getAdvanceWidth(line, layout.fontSize, { kerning: true, tracking });
+    const startX = layout.x - (layout.align === 'center' ? lineWidth / 2 : layout.align === 'right' ? lineWidth : 0);
+    const baseline = layout.y + lineIdx * layout.leading;
+    let glyphIdx = 0;
+    font.forEachGlyph(line, startX, baseline, layout.fontSize, { kerning: true, tracking }, (glyph, gx, gy, gSize) => {
+      const index = glyphIdx++;
+      const contours = opentypeCommandsToContours(glyph.getPath(gx, gy, gSize).commands).filter((c) => c.length > 1);
+      if (!contours.length) return; // spaces and other empty glyphs
+      const points: AnchorPoint[] = contours.flatMap((contour) =>
+        contour.map((pt, i) => ({
+          ...pt,
+          ...place(pt),
+          handleIn: pt.handleIn && place(pt.handleIn),
+          handleOut: pt.handleOut && place(pt.handleOut),
+          ...(i === 0 && contour !== contours[0] ? { moveTo: true } : {}),
+        }))
+      );
+      let cMinX = Infinity, cMinY = Infinity, cMaxX = -Infinity, cMaxY = -Infinity;
+      for (const pt of points) {
+        for (const q of [pt, pt.handleIn, pt.handleOut]) {
+          if (!q) continue;
+          cMinX = Math.min(cMinX, q.x); cMinY = Math.min(cMinY, q.y); cMaxX = Math.max(cMaxX, q.x); cMaxY = Math.max(cMaxY, q.y);
         }
-        if (cMinX < minX) minX = cMinX;
-        if (cMinY < minY) minY = cMinY;
-        if (cMaxX > maxX) maxX = cMaxX;
-        if (cMaxY > maxY) maxY = cMaxY;
-
-        const charNode: VectorNode = {
-          id: `${textNode.id}-char-${lineIdx}-${i}-${Math.random().toString(36).slice(2, 6)}`,
-          name: `<Compound Path> "${ch}"`,
-          type: subpaths.length > 1 ? 'compound-path' : 'path',
-          layerId: textNode.layerId,
-          parentId: groupId,
-          visible: true,
-          locked: false,
-          x: Number.isFinite(cMinX) ? cMinX : cursorX,
-          y: Number.isFinite(cMinY) ? cMinY : baselineY - fontSize,
-          width: Number.isFinite(cMaxX - cMinX) ? Math.max(2, cMaxX - cMinX) : charAdvance,
-          height: Number.isFinite(cMaxY - cMinY) ? Math.max(2, cMaxY - cMinY) : fontSize,
-          rotation: 0,
-          points: subpaths[0],
-          closed: true,
-          fills: JSON.parse(JSON.stringify(textNode.fills || [])),
-          strokes: JSON.parse(JSON.stringify(textNode.strokes || [])),
-          effects: JSON.parse(JSON.stringify(textNode.effects || [])),
-          opacity: textNode.opacity ?? 1,
-          blendMode: textNode.blendMode ?? 'normal',
-          fillRule: 'evenodd',
-        };
-        childNodes.push(charNode);
       }
-
-      cursorX += charAdvance + fontSize * trackingEm;
-    }
+      minX = Math.min(minX, cMinX); minY = Math.min(minY, cMinY); maxX = Math.max(maxX, cMaxX); maxY = Math.max(maxY, cMaxY);
+      childNodes.push({
+        id: `${groupId}-glyph-${lineIdx}-${index}`,
+        name: `<Compound Path> "${glyph.unicode ? String.fromCodePoint(glyph.unicode) : glyph.name ?? ''}"`,
+        type: contours.length > 1 ? 'compound-path' : 'path',
+        layerId: textNode.layerId,
+        parentId: groupId,
+        visible: true,
+        locked: false,
+        x: cMinX, y: cMinY, width: Math.max(0.01, cMaxX - cMinX), height: Math.max(0.01, cMaxY - cMinY),
+        rotation: 0,
+        points,
+        closed: true,
+        // Fonts wind counters opposite to their outer contour, so the font's own nonzero rule keeps overlaps solid.
+        fillRule: 'nonzero',
+        fills: JSON.parse(JSON.stringify(textNode.fills || [])),
+        strokes: JSON.parse(JSON.stringify(textNode.strokes || [])),
+        effects: [],
+        opacity: 1,
+        blendMode: 'normal',
+      });
+    });
   });
 
-  if (!Number.isFinite(minX)) {
-    minX = baseX;
-    minY = baseY;
-    maxX = baseX + Math.max(40, textNode.width || 120);
-    maxY = baseY + Math.max(20, textNode.height || fontSize);
+  if (!childNodes.length || !Number.isFinite(minX)) {
+    throw new TextOutlineError('empty', 'The font has no outlines for this text.');
   }
 
   const groupNode: VectorNode = {
@@ -171,15 +191,13 @@ export function convertTextNodeToOutlineNodes(textNode: VectorNode): OutlinedTex
     parentId: textNode.parentId,
     visible: textNode.visible ?? true,
     locked: false,
-    x: minX,
-    y: minY,
-    width: Math.max(4, maxX - minX),
-    height: Math.max(4, maxY - minY),
-    rotation: textNode.rotation ?? 0,
-    points: childNodes.flatMap((c) => c.points),
+    x: minX, y: minY, width: Math.max(0.01, maxX - minX), height: Math.max(0.01, maxY - minY),
+    rotation: 0,
+    points: [],
     closed: true,
-    fills: JSON.parse(JSON.stringify(textNode.fills || [])),
-    strokes: JSON.parse(JSON.stringify(textNode.strokes || [])),
+    fills: [],
+    strokes: [],
+    // Appearance of the live text moves to the group so it is applied once, not once per glyph.
     effects: JSON.parse(JSON.stringify(textNode.effects || [])),
     opacity: textNode.opacity ?? 1,
     blendMode: textNode.blendMode ?? 'normal',
@@ -190,7 +208,7 @@ export function convertTextNodeToOutlineNodes(textNode: VectorNode): OutlinedTex
 }
 
 /**
- * Convenience single-node wrapper returning the outlined group node (or single compound path).
+ * Convenience single-node wrapper returning the outlined group node.
  */
 export function convertTextNodeToOutlines(textNode: VectorNode): VectorNode {
   return convertTextNodeToOutlineNodes(textNode).groupNode;
@@ -247,245 +265,17 @@ function opentypeCommandsToContours(commands: opentype.PathCommand[]): AnchorPoi
     }
   }
   if (current.length > 0) contours.push(current);
-  return contours;
+  return contours.map(closeContour);
 }
 
-/**
- * Offline fallback vector glyph generator producing true cubic Bezier AnchorPoint contours
- * (with smooth handles and inner compound counters for characters like O, A, B, D, P, Q, R, e, o, 0, 8).
- */
-function buildGeometricGlyphContours(
-  ch: string,
-  x: number,
-  topY: number,
-  fontSize: number
-): { contours: AnchorPoint[][]; advance: number } {
-  const isLower = ch >= 'a' && ch <= 'z';
-  const capH = fontSize * 0.75;
-  const xH = fontSize * 0.54;
-  const h = isLower ? xH : capH;
-  const y0 = isLower ? topY + (capH - xH) : topY;
-  const w = fontSize * (isLower ? 0.48 : 0.58);
-  const strokeT = Math.max(1.5, fontSize * 0.11);
-
-  const corner = (px: number, py: number): AnchorPoint => makeAnchor(px, py, 'corner');
-
-  const makeEllipseContour = (
-    cx: number,
-    cy: number,
-    rx: number,
-    ry: number,
-    reverse = false
-  ): AnchorPoint[] => {
-    const k = 0.5522847498;
-    const ox = rx * k;
-    const oy = ry * k;
-    const pts: AnchorPoint[] = [
-      makeAnchor(cx, cy - ry, 'smooth', { x: cx - ox, y: cy - ry }, { x: cx + ox, y: cy - ry }),
-      makeAnchor(cx + rx, cy, 'smooth', { x: cx + rx, y: cy - oy }, { x: cx + rx, y: cy + oy }),
-      makeAnchor(cx, cy + ry, 'smooth', { x: cx + ox, y: cy + ry }, { x: cx - ox, y: cy + ry }),
-      makeAnchor(cx - rx, cy, 'smooth', { x: cx - rx, y: cy + oy }, { x: cx - rx, y: cy - oy }),
-    ];
-    if (reverse) {
-      return pts
-        .slice()
-        .reverse()
-        .map((p) => ({
-          ...p,
-          handleIn: p.handleOut,
-          handleOut: p.handleIn,
-        }));
+/** Fonts repeat the first point before `Z`; keep the closing curve's handle on the first anchor instead of duplicating it. */
+function closeContour(contour: AnchorPoint[]): AnchorPoint[] {
+  if (contour.length > 2) {
+    const first = contour[0], last = contour[contour.length - 1];
+    if (Math.abs(first.x - last.x) < 1e-6 && Math.abs(first.y - last.y) < 1e-6) {
+      if (last.handleIn) first.handleIn = last.handleIn;
+      return contour.slice(0, -1);
     }
-    return pts;
-  };
-
-  const upper = ch.toUpperCase();
-
-  if (upper === 'O' || ch === '0') {
-    const cx = x + w / 2;
-    const cy = y0 + h / 2;
-    return {
-      contours: [
-        makeEllipseContour(cx, cy, w / 2, h / 2, false),
-        makeEllipseContour(cx, cy, Math.max(2, w / 2 - strokeT), Math.max(2, h / 2 - strokeT), true),
-      ],
-      advance: w + fontSize * 0.08,
-    };
   }
-
-  if (upper === 'A') {
-    const outer: AnchorPoint[] = [
-      corner(x + w * 0.5, y0),
-      corner(x + w, y0 + h),
-      corner(x + w - strokeT, y0 + h),
-      corner(x + w * 0.72, y0 + h * 0.68),
-      corner(x + w * 0.28, y0 + h * 0.68),
-      corner(x + strokeT, y0 + h),
-      corner(x, y0 + h),
-    ];
-    const inner: AnchorPoint[] = [
-      corner(x + w * 0.5, y0 + strokeT * 1.4),
-      corner(x + w * 0.34, y0 + h * 0.55),
-      corner(x + w * 0.66, y0 + h * 0.55),
-    ];
-    return { contours: [outer, inner], advance: w + fontSize * 0.08 };
-  }
-
-  if (upper === 'I' || ch === '1' || ch === 'l') {
-    const iw = strokeT * 1.3;
-    return {
-      contours: [
-        [corner(x, y0), corner(x + iw, y0), corner(x + iw, y0 + h), corner(x, y0 + h)],
-      ],
-      advance: iw + fontSize * 0.1,
-    };
-  }
-
-  if (upper === 'L') {
-    return {
-      contours: [
-        [
-          corner(x, y0),
-          corner(x + strokeT, y0),
-          corner(x + strokeT, y0 + h - strokeT),
-          corner(x + w * 0.85, y0 + h - strokeT),
-          corner(x + w * 0.85, y0 + h),
-          corner(x, y0 + h),
-        ],
-      ],
-      advance: w * 0.92,
-    };
-  }
-
-  if (upper === 'T') {
-    const mid = x + w / 2;
-    return {
-      contours: [
-        [
-          corner(x, y0),
-          corner(x + w, y0),
-          corner(x + w, y0 + strokeT),
-          corner(mid + strokeT / 2, y0 + strokeT),
-          corner(mid + strokeT / 2, y0 + h),
-          corner(mid - strokeT / 2, y0 + h),
-          corner(mid - strokeT / 2, y0 + strokeT),
-          corner(x, y0 + strokeT),
-        ],
-      ],
-      advance: w + fontSize * 0.06,
-    };
-  }
-
-  if (upper === 'H') {
-    const midY = y0 + h / 2;
-    return {
-      contours: [
-        [
-          corner(x, y0),
-          corner(x + strokeT, y0),
-          corner(x + strokeT, midY - strokeT / 2),
-          corner(x + w - strokeT, midY - strokeT / 2),
-          corner(x + w - strokeT, y0),
-          corner(x + w, y0),
-          corner(x + w, y0 + h),
-          corner(x + w - strokeT, y0 + h),
-          corner(x + w - strokeT, midY + strokeT / 2),
-          corner(x + strokeT, midY + strokeT / 2),
-          corner(x + strokeT, y0 + h),
-          corner(x, y0 + h),
-        ],
-      ],
-      advance: w + fontSize * 0.08,
-    };
-  }
-
-  if (upper === 'E' || upper === 'F') {
-    const midY = y0 + h * 0.48;
-    const pts: AnchorPoint[] = [
-      corner(x, y0),
-      corner(x + w * 0.9, y0),
-      corner(x + w * 0.9, y0 + strokeT),
-      corner(x + strokeT, y0 + strokeT),
-      corner(x + strokeT, midY - strokeT / 2),
-      corner(x + w * 0.78, midY - strokeT / 2),
-      corner(x + w * 0.78, midY + strokeT / 2),
-      corner(x + strokeT, midY + strokeT / 2),
-    ];
-    if (upper === 'E') {
-      pts.push(
-        corner(x + strokeT, y0 + h - strokeT),
-        corner(x + w * 0.92, y0 + h - strokeT),
-        corner(x + w * 0.92, y0 + h),
-        corner(x, y0 + h)
-      );
-    } else {
-      pts.push(corner(x + strokeT, y0 + h), corner(x, y0 + h));
-    }
-    return { contours: [pts], advance: w };
-  }
-
-  if (upper === 'C') {
-    const cx = x + w * 0.52;
-    const cy = y0 + h / 2;
-    const rx = w * 0.48;
-    const ry = h / 2;
-    return {
-      contours: [
-        [
-          makeAnchor(x + w * 0.92, y0 + h * 0.25, 'smooth', undefined, { x: cx + rx * 0.4, y: y0 }),
-          makeAnchor(cx, y0, 'smooth', { x: cx + rx * 0.5, y: y0 }, { x: x, y: y0 }),
-          makeAnchor(x, cy, 'smooth', { x: x, y: y0 + ry * 0.3 }, { x: x, y: y0 + h - ry * 0.3 }),
-          makeAnchor(cx, y0 + h, 'smooth', { x: x, y: y0 + h }, { x: cx + rx * 0.5, y: y0 + h }),
-          makeAnchor(x + w * 0.92, y0 + h * 0.75, 'corner', { x: cx + rx * 0.4, y: y0 + h }),
-          corner(x + w * 0.76, y0 + h * 0.72),
-          makeAnchor(
-            cx,
-            y0 + h - strokeT,
-            'smooth',
-            { x: cx + rx * 0.3, y: y0 + h - strokeT },
-            { x: x + strokeT, y: y0 + h - strokeT }
-          ),
-          makeAnchor(
-            x + strokeT,
-            cy,
-            'smooth',
-            { x: x + strokeT, y: cy + ry * 0.5 },
-            { x: x + strokeT, y: cy - ry * 0.5 }
-          ),
-          makeAnchor(
-            cx,
-            y0 + strokeT,
-            'smooth',
-            { x: x + strokeT, y: y0 + strokeT },
-            { x: cx + rx * 0.3, y: y0 + strokeT }
-          ),
-          corner(x + w * 0.76, y0 + h * 0.28),
-        ],
-      ],
-      advance: w + fontSize * 0.06,
-    };
-  }
-
-  const r = Math.min(w, h) * 0.22;
-  const outer: AnchorPoint[] = [
-    makeAnchor(x + r, y0, 'smooth', { x: x + r * 0.4, y: y0 }),
-    makeAnchor(x + w - r, y0, 'smooth', undefined, { x: x + w - r * 0.4, y: y0 }),
-    makeAnchor(x + w, y0 + r, 'smooth', { x: x + w, y: y0 + r * 0.4 }),
-    makeAnchor(x + w, y0 + h - r, 'smooth', undefined, { x: x + w, y: y0 + h - r * 0.4 }),
-    makeAnchor(x + w - r, y0 + h, 'smooth', { x: x + w - r * 0.4, y: y0 + h }),
-    makeAnchor(x + r, y0 + h, 'smooth', undefined, { x: x + r * 0.4, y: y0 + h }),
-    makeAnchor(x, y0 + h - r, 'smooth', { x: x, y: y0 + h - r * 0.4 }),
-    makeAnchor(x, y0 + r, 'smooth', undefined, { x: x, y: y0 + r * 0.4 }),
-  ];
-  const inner = [
-    corner(x + strokeT, y0 + strokeT),
-    corner(x + strokeT, y0 + h - strokeT),
-    corner(x + w - strokeT, y0 + h - strokeT),
-    corner(x + w - strokeT, y0 + strokeT),
-  ];
-
-  return {
-    contours: [outer, inner],
-    advance: w + fontSize * 0.08,
-  };
+  return contour;
 }

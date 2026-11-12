@@ -4,23 +4,64 @@ import { createRectangleAnchors } from './bezier';
 export type TextMeasurer = (text: string, fontSize: number, node: VectorNode) => number;
 
 let context: CanvasRenderingContext2D | null | undefined;
-/** Measure with the actual browser font; deterministic approximation is used in headless tests. */
-export const measureTextWidth: TextMeasurer = (text, size, node) => {
+function measuringContext(): CanvasRenderingContext2D | null {
   if (context === undefined) {
     context = null;
     if (typeof document !== 'undefined' && typeof CanvasRenderingContext2D !== 'undefined') {
       try { context = document.createElement('canvas').getContext('2d'); } catch { /* no canvas */ }
     }
   }
-  if (context) {
-    const style = node.textStyle;
-    const italic = style?.fontStyle?.toLowerCase().includes('italic') ? 'italic ' : '';
-    const bold = style?.fontStyle?.toLowerCase().includes('bold') ? 'bold ' : '';
-    context.font = `${italic}${bold}${size}px ${style?.fontFamily || 'Inter, sans-serif'}`;
-    return context.measureText(text).width;
+  return context;
+}
+
+/** CSS font shorthand used by every text renderer for this node at the given size. */
+export function cssFontFor(node: VectorNode, size: number): string {
+  const style = node.textStyle;
+  const italic = style?.fontStyle?.toLowerCase().includes('italic') ? 'italic ' : '';
+  const bold = style?.fontStyle?.toLowerCase().includes('bold') ? 'bold ' : '';
+  return `${italic}${bold}${size}px ${style?.fontFamily || 'Inter, sans-serif'}`;
+}
+
+/** `canvas`: real browser font metrics. `approximate`: no canvas (Node, tests), widths are estimated. */
+export function textMeasurementSource(): 'canvas' | 'approximate' {
+  return measuringContext() ? 'canvas' : 'approximate';
+}
+
+/** Measure with the actual browser font; deterministic approximation is used in headless tests. */
+export const measureTextWidth: TextMeasurer = (text, size, node) => {
+  const ctx = measuringContext();
+  if (ctx) {
+    ctx.font = cssFontFor(node, size);
+    return ctx.measureText(text).width;
   }
   return Array.from(text).length * size * 0.56;
 };
+
+export interface LineInk { left: number; right: number; ascent: number; descent: number; exact: boolean }
+/**
+ * Painted extent of one line relative to its left-aligned origin and baseline (left/right are offsets
+ * from the origin; ascent/descent are distances above/below the baseline). Without a canvas this
+ * falls back to typical Latin proportions and `exact` is false.
+ */
+export function measureLineInk(text: string, size: number, node: VectorNode): LineInk {
+  const ctx = measuringContext();
+  const spacing = (node.textStyle?.tracking ?? 0) * size / 1000;
+  const extra = Math.max(0, Array.from(text).length - 1) * spacing;
+  if (ctx) {
+    ctx.font = cssFontFor(node, size);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    const m = ctx.measureText(text);
+    const ascent = Number.isFinite(m.actualBoundingBoxAscent) ? m.actualBoundingBoxAscent : size * 0.8;
+    const descent = Number.isFinite(m.actualBoundingBoxDescent) ? m.actualBoundingBoxDescent : size * 0.2;
+    const left = Number.isFinite(m.actualBoundingBoxLeft) ? -m.actualBoundingBoxLeft : 0;
+    const right = Number.isFinite(m.actualBoundingBoxRight) ? m.actualBoundingBoxRight : m.width;
+    // `left` is positive when the first glyph's ink starts right of the origin (its side bearing).
+    return { left, right: right + extra, ascent, descent, exact: true };
+  }
+  const width = Array.from(text).length * size * 0.56 + extra;
+  return { left: 0, right: width, ascent: size * 0.72, descent: /[gjpqy,;]/.test(text) ? size * 0.21 : 0, exact: false };
+}
 
 function widthOf(text: string, size: number, node: VectorNode, measure: TextMeasurer): number {
   const spacing = (node.textStyle?.tracking ?? 0) * size / 1000;

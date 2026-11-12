@@ -1,6 +1,15 @@
 import { blendIntermediateNodes } from '../math/blend';
-import { anchorsToSvgPath } from '../math/bezier';
+import { anchorsToSvgPath, generateNodeSvgPath, generateVariableWidthStrokePolygon } from '../math/bezier';
 import { clipsTextToFrame, layoutText, textGlyphTransform } from '../math/textLayout';
+import {
+  effectFilterMarkup,
+  isContainerNode,
+  nodeEffectBounds,
+  normalizedGradientStops,
+  resolveClipMask,
+  resolveEffects,
+  resolvePaintColor,
+} from '../render/appearance';
 import type {
   AnchorPoint,
   ArtboardItem,
@@ -9,7 +18,7 @@ import type {
   StudioDocument,
   VectorNode,
 } from '../types';
-import { convertTextNodeToOutlineNodes } from './opentypeHelper';
+import { TextOutlineError, convertTextNodeToOutlineNodes } from './opentypeHelper';
 
 export type SvgStylingMode = 'inline' | 'internal-css' | 'presentation';
 export type SvgFontMode = 'svg' | 'outline';
@@ -27,6 +36,8 @@ export interface SvgExportOptions {
   includeBackground?: boolean;
   /** Workspace preview: render all artboards and use the supplied scene bounds. */
   workspaceViewBox?: { x: number; y: number; width: number; height: number };
+  /** Called for artwork that cannot be represented faithfully, instead of silently degrading it. */
+  onWarning?: (message: string) => void;
 }
 
 export const DEFAULT_SVG_EXPORT_OPTIONS: SvgExportOptions = {
@@ -93,143 +104,153 @@ export function exportDocumentToSvgString(
   const nodesMap = doc.nodes || {};
   const allowedIds = opts.onlyNodeIds ? new Set(opts.onlyNodeIds) : null;
 
+  const hex = (s: string) => Array.from(s, (c) => c.codePointAt(0)!.toString(16)).join('_');
+  const gradientIds = new Set<string>();
+  const filterIds = new Set<string>();
+  const warn = (message: string) => opts.onWarning?.(message);
+  const colorOf = (item: { color: string; globalSwatchId?: string; tint?: number }) =>
+    resolvePaintColor(doc, item.color || '#000000', item.globalSwatchId, item.tint);
+
+  /** Serialize presentation properties according to the chosen styling mode. */
+  const buildStyle = (props: Array<[string, string]>): string => {
+    if (props.length === 0) return '';
+    if (opts.styling === 'inline') return ` style="${props.map(([k, v]) => `${k}:${v}`).join(';')}"`;
+    if (opts.styling === 'internal-css') {
+      const clsName = `cls-${classCounter++}`;
+      cssRules.push(`.${clsName} { ${props.map(([k, v]) => `${k}: ${v};`).join(' ')} }`);
+      return ` class="${clsName}"`;
+    }
+    // mix-blend-mode is a CSS property, not an SVG presentation attribute.
+    const attrs = props.filter(([k]) => k !== 'mix-blend-mode').map(([k, v]) => `${k}="${v}"`).join(' ');
+    const blend = props.find(([k]) => k === 'mix-blend-mode');
+    return `${attrs ? ` ${attrs}` : ''}${blend ? ` style="mix-blend-mode:${blend[1]}"` : ''}`;
+  };
+
+  const fillPaint = (node: VectorNode, fill: FillItem): string => {
+    if (fill.type === 'gradient' && fill.gradient) {
+      const gradId = `grad_${hex(node.id)}_${hex(fill.id)}`;
+      if (!gradientIds.has(gradId)) {
+        gradientIds.add(gradId);
+        defsList.push(buildGradientSvgDef(gradId, fill.gradient, fmt));
+      }
+      return `url(#${gradId})`;
+    }
+    if (fill.type === 'pattern') warn(`"${node.name}": pattern fills are exported as their base color.`);
+    return colorOf(fill);
+  };
+
+  const fillProps = (node: VectorNode, fill: FillItem): Array<[string, string]> => {
+    const props: Array<[string, string]> = [['fill', fillPaint(node, fill)]];
+    if ((fill.opacity ?? 1) < 1) props.push(['fill-opacity', fmt(fill.opacity)]);
+    if (node.fillRule === 'evenodd') props.push(['fill-rule', 'evenodd']);
+    if (fill.blendMode && fill.blendMode !== 'normal') props.push(['mix-blend-mode', fill.blendMode]);
+    return props;
+  };
+
+  const strokeProps = (stroke: StrokeItem): Array<[string, string]> => {
+    const props: Array<[string, string]> = [['stroke', colorOf(stroke)], ['stroke-width', fmt(stroke.weight)]];
+    if (stroke.cap && stroke.cap !== 'butt') props.push(['stroke-linecap', stroke.cap === 'projecting' ? 'square' : stroke.cap]);
+    if (stroke.join && stroke.join !== 'miter') props.push(['stroke-linejoin', stroke.join]);
+    if (stroke.join === 'miter' && (stroke.miterLimit || 10) !== 4) props.push(['stroke-miterlimit', fmt(stroke.miterLimit || 10)]);
+    if (stroke.dashArray && stroke.dashArray.length > 0) props.push(['stroke-dasharray', stroke.dashArray.map(fmt).join(' ')]);
+    if ((stroke.opacity ?? 1) < 1) props.push(['stroke-opacity', fmt(stroke.opacity)]);
+    if (stroke.blendMode && stroke.blendMode !== 'normal') props.push(['mix-blend-mode', stroke.blendMode]);
+    return props;
+  };
+
+  /** Properties that apply to the whole object: opacity, blend mode and live-effect filter. */
+  const groupProps = (node: VectorNode): Array<[string, string]> => {
+    const props: Array<[string, string]> = [];
+    if ((node.opacity ?? 1) < 1) props.push(['opacity', fmt(node.opacity)]);
+    if (node.blendMode && node.blendMode !== 'normal') props.push(['mix-blend-mode', node.blendMode]);
+    const fx = resolveEffects(node);
+    const bounds = fx ? nodeEffectBounds(node, nodesMap) : null;
+    if (fx && bounds) {
+      const filterId = `fx_${hex(node.id)}`;
+      if (!filterIds.has(filterId)) {
+        filterIds.add(filterId);
+        defsList.push(effectFilterMarkup(filterId, fx, bounds, fmt));
+      }
+      props.push(['filter', `url(#${filterId})`]);
+    }
+    return props;
+  };
+
+  const rotateAttr = (node: VectorNode): string =>
+    node.rotation && Math.abs(node.rotation) > 0.001
+      ? ` transform="rotate(${fmt(node.rotation)} ${fmt(node.x + node.width / 2)} ${fmt(node.y + node.height / 2)})"`
+      : '';
+
+  /** Path data: plain anchor lists keep the user's decimal setting; anything live goes through the shared generator. */
+  const pathDataFor = (node: VectorNode): string => {
+    const closed = node.closed !== false && node.type !== 'line';
+    const isCompound = (node.type === 'compound-path' || node.type === 'compound-shape') && !!node.children?.length;
+    const plain =
+      node.points?.length >= 2 &&
+      !node.envelopeSpec &&
+      !isCompound &&
+      !(node.effects || []).some((fx) => fx.enabled) &&
+      !node.points.some((p) => (p.cornerRadius ?? node.cornerRadius ?? 0) > 0);
+    return plain ? anchorPointsToSvgPathD(node.points, closed, fmt) : generateNodeSvgPath(node, nodesMap);
+  };
+
   const renderNodeElement = (node: VectorNode, indent: string): string => {
     if (!node || !node.visible || node.isGuide) return '';
     if (allowedIds && !allowedIds.has(node.id) && !allowedIds.has(node.parentId || '') && (!node.children || !node.children.some((c) => allowedIds.has(c)))) {
       return '';
     }
 
-    if (node.type === 'blend' && node.children?.length === 2) {
-      const endpoints = node.children.map(id => nodesMap[id]);
-      if (endpoints.every(Boolean)) {
-        const parts = [endpoints[0], ...blendIntermediateNodes(node, nodesMap), endpoints[1]];
-        return `${indent}<g opacity="${fmt(node.opacity)}">\n${parts.map(child => renderNodeElement(child, `${indent}  `)).join('\n')}\n${indent}</g>`;
-      }
-    }
-
-    // If fontMode === 'outline' and node is text, convert to outline group on the fly
-    if (node.type === 'text' && opts.fontMode === 'outline') {
-      const outlined = convertTextNodeToOutlineNodes(node);
-      const childStrings = outlined.childNodes
-        .map((chNode) => renderNodeElement(chNode, `${indent}  `))
-        .filter(Boolean);
-      const gid = formatObjectId(node.name || 'Text_Outlines', node.id);
-      return `${indent}<g id="${gid}">\n${childStrings.join('\n')}\n${indent}</g>`;
-    }
-
-    if (
-      (node.type === 'group' ||
-        node.type === 'compound-shape' ||
-        node.type === 'clipping-group' ||
-        node.type === 'live-paint-group') &&
-      node.children &&
-      node.children.length > 0
-    ) {
+    // Group, clipping group and blend: containers have no geometry of their own.
+    if (isContainerNode(node) && node.children && node.children.length > 0) {
       const gid = formatObjectId(node.name || 'Group', node.id);
-      const childMarkup = node.children
-        .map((cid) => nodesMap[cid])
-        .filter(Boolean)
-        .map((child) => renderNodeElement(child, `${indent}  `))
-        .filter(Boolean)
-        .join('\n');
-      const opacityAttr = node.opacity < 1 ? ` opacity="${fmt(node.opacity)}"` : '';
-      return `${indent}<g id="${gid}"${opacityAttr}>\n${childMarkup}\n${indent}</g>`;
-    }
-
-    // Resolve primary visible fill & stroke
-    const visibleFills = (node.fills || []).filter((f) => f.visible && f.type !== 'none');
-    const visibleStrokes = (node.strokes || []).filter((s) => s.visible && s.weight > 0);
-    const primaryFill: FillItem | undefined = visibleFills[0];
-    const primaryStroke: StrokeItem | undefined = visibleStrokes[0];
-
-    let fillValue = 'none';
-    let fillOpacity = 1;
-    if (primaryFill) {
-      fillOpacity = primaryFill.opacity ?? 1;
-      if (primaryFill.type === 'gradient' && primaryFill.gradient) {
-        const gradId = `grad_${Array.from(node.id, c => c.codePointAt(0)!.toString(16)).join('_')}`;
-        defsList.push(buildGradientSvgDef(gradId, primaryFill.gradient, fmt));
-        fillValue = `url(#${gradId})`;
-      } else {
-        fillValue = primaryFill.color || '#000000';
+      const attrs = buildStyle(groupProps(node));
+      if (node.type === 'blend' && node.children.length === 2) {
+        const endpoints = node.children.map((id) => nodesMap[id]);
+        if (endpoints.every(Boolean)) {
+          const parts = [endpoints[0], ...blendIntermediateNodes(node, nodesMap), endpoints[1]];
+          return `${indent}<g${attrs}>\n${parts.map((child) => renderNodeElement(child, `${indent}  `)).join('\n')}\n${indent}</g>`;
+        }
       }
-    } else if (node.type === 'line') {
-      fillValue = 'none';
+      const clip = resolveClipMask(node, nodesMap);
+      const kids = (clip ? clip.content : node.children.map((cid) => nodesMap[cid]).filter(Boolean));
+      const render = (pad: string) => kids.map((child) => renderNodeElement(child, pad)).filter(Boolean).join('\n');
+      if (clip) {
+        const clipId = `clip_${hex(node.id)}`;
+        defsList.push(`<clipPath id="${clipId}"><path d="${pathDataFor(clip.mask)}"${rotateAttr(clip.mask)}${clip.mask.fillRule === 'evenodd' ? ' clip-rule="evenodd"' : ''}/></clipPath>`);
+        return `${indent}<g id="${gid}"${attrs}>\n${indent}  <g clip-path="url(#${clipId})">\n${render(`${indent}    `)}\n${indent}  </g>\n${indent}</g>`;
+      }
+      if (node.type === 'clipping-group') warn(`"${node.name}": clipping group has no usable mask shape, children are exported unclipped.`);
+      return `${indent}<g id="${gid}"${attrs}>\n${render(`${indent}  `)}\n${indent}</g>`;
     }
 
-    let strokeValue = 'none';
-    let strokeWidth = 0;
-    let strokeOpacity = 1;
-    if (primaryStroke) {
-      strokeValue = primaryStroke.color || '#000000';
-      strokeWidth = primaryStroke.weight;
-      strokeOpacity = primaryStroke.opacity ?? 1;
-    }
-
-    const styleProps: Array<[string, string]> = [];
-    styleProps.push(['fill', fillValue]);
-    if (fillOpacity < 1) styleProps.push(['fill-opacity', fmt(fillOpacity)]);
-    if (node.fillRule === 'evenodd') styleProps.push(['fill-rule', 'evenodd']);
-    if (strokeValue !== 'none' && strokeWidth > 0) {
-      styleProps.push(['stroke', strokeValue]);
-      styleProps.push(['stroke-width', fmt(strokeWidth)]);
-      if (primaryStroke?.cap && primaryStroke.cap !== 'butt') {
-        styleProps.push([
-          'stroke-linecap',
-          primaryStroke.cap === 'projecting' ? 'square' : primaryStroke.cap,
-        ]);
+    // If fontMode === 'outline' and node is text, convert to outline group on the fly.
+    // When no matching font file is available the live <text> is kept (and reported), never a look-alike.
+    if (node.type === 'text' && opts.fontMode === 'outline') {
+      try {
+        const outlined = convertTextNodeToOutlineNodes(node);
+        const childStrings = outlined.childNodes
+          .map((chNode) => renderNodeElement(chNode, `${indent}  `))
+          .filter(Boolean);
+        const gid = formatObjectId(node.name || 'Text_Outlines', node.id);
+        const attrs = buildStyle(groupProps(outlined.groupNode));
+        return `${indent}<g id="${gid}"${attrs}>\n${childStrings.join('\n')}\n${indent}</g>`;
+      } catch (error) {
+        if (!(error instanceof TextOutlineError)) throw error;
+        warn(`"${node.name}": exported as live text because it could not be outlined. ${error.message}`);
       }
-      if (primaryStroke?.join && primaryStroke.join !== 'miter') {
-        styleProps.push(['stroke-linejoin', primaryStroke.join]);
-      }
-      if (primaryStroke?.dashArray && primaryStroke.dashArray.length > 0) {
-        styleProps.push(['stroke-dasharray', primaryStroke.dashArray.map(fmt).join(' ')]);
-      }
-      if (strokeOpacity < 1) styleProps.push(['stroke-opacity', fmt(strokeOpacity)]);
-    }
-    if (node.opacity < 1) {
-      styleProps.push(['opacity', fmt(node.opacity)]);
-    }
-    if (node.blendMode && node.blendMode !== 'normal') {
-      styleProps.push(['mix-blend-mode', node.blendMode]);
-    }
-
-    let styleAttributeStr = '';
-    if (opts.styling === 'inline') {
-      const inlineCss = styleProps.map(([k, v]) => `${k}:${v}`).join(';');
-      styleAttributeStr = ` style="${inlineCss}"`;
-    } else if (opts.styling === 'internal-css') {
-      const clsName = `cls-${classCounter++}`;
-      const ruleBody = styleProps.map(([k, v]) => `${k}: ${v};`).join(' ');
-      cssRules.push(`.${clsName} { ${ruleBody} }`);
-      styleAttributeStr = ` class="${clsName}"`;
-    } else {
-      styleAttributeStr =
-        ' ' + styleProps.map(([k, v]) => `${k}="${v}"`).join(' ');
     }
 
     const elemId = formatObjectId(node.name || node.type, node.id);
     const cx = node.x + node.width / 2;
     const cy = node.y + node.height / 2;
-    const transformAttr =
-      node.rotation && Math.abs(node.rotation) > 0.001
-        ? ` transform="rotate(${fmt(node.rotation)} ${fmt(cx)} ${fmt(cy)})"`
-        : '';
+    const transformAttr = rotateAttr(node);
+    const wholeObject = groupProps(node);
 
-    if (node.type === 'rectangle' && (!node.points || node.points.length === 0)) {
-      const rxAttr =
-        node.cornerRadius && node.cornerRadius > 0 ? ` rx="${fmt(node.cornerRadius)}"` : '';
-      return `${indent}<rect id="${elemId}" x="${fmt(node.x)}" y="${fmt(node.y)}" width="${fmt(node.width)}" height="${fmt(node.height)}"${rxAttr}${transformAttr}${styleAttributeStr}/>`;
-    }
-
-    if (node.type === 'ellipse' && (!node.points || node.points.length === 0)) {
-      const rx = node.width / 2;
-      const ry = node.height / 2;
-      return `${indent}<ellipse id="${elemId}" cx="${fmt(cx)}" cy="${fmt(cy)}" rx="${fmt(rx)}" ry="${fmt(ry)}"${transformAttr}${styleAttributeStr}/>`;
-    }
+    const visibleFills = (node.fills || []).filter((f) => f.visible && f.type !== 'none');
+    const visibleStrokes = (node.strokes || []).filter((s) => s.visible && s.weight > 0);
 
     if (node.type === 'image' && node.imageUrl) {
-      return `${indent}<image id="${elemId}" x="${fmt(node.x)}" y="${fmt(node.y)}" width="${fmt(node.width)}" height="${fmt(node.height)}" href="${escapeXml(node.imageUrl)}" preserveAspectRatio="none"${transformAttr}${node.opacity < 1 ? ` opacity="${fmt(node.opacity)}"` : ''}/>`;
+      return `${indent}<image id="${elemId}" x="${fmt(node.x)}" y="${fmt(node.y)}" width="${fmt(node.width)}" height="${fmt(node.height)}" href="${escapeXml(node.imageUrl)}" preserveAspectRatio="none"${transformAttr}${buildStyle(wholeObject)}/>`;
     }
 
     if (node.type === 'text') {
@@ -243,28 +264,60 @@ export function exportDocumentToSvgString(
       const anchor = layout.align === 'center' ? 'middle' : layout.align === 'right' ? 'end' : 'start';
       const decoration = [node.textStyle?.underline && 'underline', node.textStyle?.strikethrough && 'line-through'].filter(Boolean).join(' ');
       const spans = layout.lines.map((line, i) => `<tspan x="${fmt(layout.x)}" y="${fmt(layout.y + i * layout.leading)}">${escapeXml(line)}</tspan>`).join('');
-      return `${indent}<g${transformAttr}${clipId ? ` clip-path="url(#${clipId})"` : ''}><text id="${elemId}" transform="matrix(${fmt(glyph.sx)} 0 0 ${fmt(glyph.sy)} ${fmt(glyph.tx)} ${fmt(glyph.ty)})" font-family="${escapeXml(ff)}" font-size="${fmt(layout.fontSize)}" font-weight="${fw}"${italic} text-anchor="${anchor}" letter-spacing="${fmt(layout.letterSpacing)}"${decoration ? ` text-decoration="${decoration}"` : ''}${node.textStyle?.vertical ? ' writing-mode="vertical-rl"' : ''} xml:space="preserve"${styleAttributeStr}>${spans}</text></g>`;
+      const textFill = visibleFills[0];
+      const textStroke = visibleStrokes[0];
+      const textProps: Array<[string, string]> = textFill ? fillProps(node, textFill).filter(([k]) => k !== 'mix-blend-mode') : [['fill', 'none']];
+      if (textStroke) textProps.push(...strokeProps(textStroke).filter(([k]) => k !== 'mix-blend-mode'));
+      const textEl = `<text id="${elemId}" transform="matrix(${fmt(glyph.sx)} 0 0 ${fmt(glyph.sy)} ${fmt(glyph.tx)} ${fmt(glyph.ty)})" font-family="${escapeXml(ff)}" font-size="${fmt(layout.fontSize)}" font-weight="${fw}"${italic} text-anchor="${anchor}" letter-spacing="${fmt(layout.letterSpacing)}"${decoration ? ` text-decoration="${decoration}"` : ''}${node.textStyle?.vertical ? ' writing-mode="vertical-rl"' : ''} xml:space="preserve"${buildStyle(textProps)}>${spans}</text>`;
+      const inner = clipId ? `<g clip-path="url(#${clipId})">${textEl}</g>` : textEl;
+      return `${indent}<g${transformAttr}${buildStyle(wholeObject)}>${inner}</g>`;
     }
 
-    // Default: <path> using AnchorPoint[] curves (or synthesized rectangle points)
-    const pts =
-      node.points && node.points.length >= 2
-        ? node.points
-        : [
-            { id: '1', x: node.x, y: node.y, pointType: 'corner' as const },
-            { id: '2', x: node.x + node.width, y: node.y, pointType: 'corner' as const },
-            {
-              id: '3',
-              x: node.x + node.width,
-              y: node.y + node.height,
-              pointType: 'corner' as const,
-            },
-            { id: '4', x: node.x, y: node.y + node.height, pointType: 'corner' as const },
-          ];
-    const closed = node.closed !== false && node.type !== 'line';
-    const hasLiveCorners = pts.some(p => (p.cornerRadius ?? node.cornerRadius ?? 0) > 0);
-    const d = hasLiveCorners ? anchorsToSvgPath(pts, closed, node.cornerRadius, node.cornerType) : anchorPointsToSvgPathD(pts, closed, fmt);
-    return `${indent}<path id="${elemId}" d="${d}"${transformAttr}${styleAttributeStr}/>`;
+    const hasPerPaintBlend = [...visibleFills, ...visibleStrokes].some((p) => p.blendMode && p.blendMode !== 'normal');
+    const isVariableWidth = (stroke: StrokeItem) =>
+      Boolean(stroke.widthProfileId && stroke.widthProfileId !== 'uniform') || (node.points || []).some((p) => p.widthLeft !== undefined);
+    const hasVariableStroke = node.points?.length >= 2 && visibleStrokes.some(isVariableWidth);
+    const hasGeometryFx = (node.effects || []).some((fx) => fx.enabled);
+
+    if (visibleFills.length > 1 || visibleStrokes.length > 1 || hasPerPaintBlend || hasVariableStroke) {
+      const d = pathDataFor(node);
+      const parts: string[] = [];
+      for (const fill of visibleFills) parts.push(`${indent}  <path d="${d}"${buildStyle(fillProps(node, fill))}/>`);
+      for (const stroke of visibleStrokes) {
+        if (isVariableWidth(stroke) && node.points?.length >= 2) {
+          const vw = generateVariableWidthStrokePolygon(node.points, node.closed, stroke.weight, stroke.widthProfileId);
+          const props: Array<[string, string]> = [['fill', colorOf(stroke)]];
+          if ((stroke.opacity ?? 1) < 1) props.push(['fill-opacity', fmt(stroke.opacity)]);
+          if (stroke.blendMode && stroke.blendMode !== 'normal') props.push(['mix-blend-mode', stroke.blendMode]);
+          if (vw) parts.push(`${indent}  <path d="${vw}"${buildStyle(props)}/>`);
+        } else {
+          parts.push(`${indent}  <path d="${d}"${buildStyle([['fill', 'none'], ...strokeProps(stroke)])}/>`);
+        }
+      }
+      return `${indent}<g id="${elemId}"${transformAttr}${buildStyle(wholeObject)}>\n${parts.join('\n')}\n${indent}</g>`;
+    }
+
+    // One fill and at most one stroke: a single element with the object's own opacity/filter.
+    const primaryFill: FillItem | undefined = visibleFills[0];
+    const primaryStroke: StrokeItem | undefined = visibleStrokes[0];
+    const styleProps: Array<[string, string]> = primaryFill ? fillProps(node, primaryFill) : [['fill', 'none']];
+    if (primaryStroke) styleProps.push(...strokeProps(primaryStroke));
+    styleProps.push(...wholeObject);
+    const styleAttributeStr = buildStyle(styleProps);
+
+    if (node.type === 'rectangle' && (!node.points || node.points.length === 0) && !hasGeometryFx) {
+      const rxAttr =
+        node.cornerRadius && node.cornerRadius > 0 ? ` rx="${fmt(node.cornerRadius)}"` : '';
+      return `${indent}<rect id="${elemId}" x="${fmt(node.x)}" y="${fmt(node.y)}" width="${fmt(node.width)}" height="${fmt(node.height)}"${rxAttr}${transformAttr}${styleAttributeStr}/>`;
+    }
+
+    if (node.type === 'ellipse' && (!node.points || node.points.length === 0) && !hasGeometryFx) {
+      const rx = node.width / 2;
+      const ry = node.height / 2;
+      return `${indent}<ellipse id="${elemId}" cx="${fmt(cx)}" cy="${fmt(cy)}" rx="${fmt(rx)}" ry="${fmt(ry)}"${transformAttr}${styleAttributeStr}/>`;
+    }
+
+    return `${indent}<path id="${elemId}" d="${pathDataFor(node)}"${transformAttr}${styleAttributeStr}/>`;
   };
 
   const layerBlocks: string[] = [];
@@ -280,7 +333,8 @@ export function exportDocumentToSvgString(
     }
     if (layerChildren.length > 0) {
       const lid = formatObjectId(layer.name || 'Layer', layer.id);
-      layerBlocks.push(`  <g id="${lid}">\n${layerChildren.join('\n')}\n  </g>`);
+      const layerOpacity = (layer.opacity ?? 1) < 1 ? ` opacity="${fmt(Math.max(0, layer.opacity))}"` : '';
+      layerBlocks.push(`  <g id="${lid}"${layerOpacity}>\n${layerChildren.join('\n')}\n  </g>`);
     }
   }
 
@@ -376,7 +430,7 @@ function buildGradientSvgDef(
   grad: NonNullable<FillItem['gradient']>,
   fmt: (n: number) => string
 ): string {
-  const stopsMarkup = (grad.stops || [])
+  const stopsMarkup = normalizedGradientStops(grad)
     .map(
       (s) =>
         `<stop offset="${fmt(s.offset * 100)}%" stop-color="${s.color}" stop-opacity="${fmt(s.opacity ?? 1)}"/>`

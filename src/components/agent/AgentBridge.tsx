@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { Cable, X } from 'lucide-react';
-import { activeDocument, commitChange, inspectActive, prepareChange, previewActive, type BridgeRequest } from './liveBridge';
+import { activeDocument, commitChange, inspectActive, measureActive, prepareChange, previewActive, type BridgeRequest } from './liveBridge';
 
 /** Explicit opt-in local connection. The token lives only in component memory. */
 export function AgentBridge() {
@@ -74,6 +74,7 @@ export function AgentBridge() {
             try {
               if (request.type === 'inspect') { await reply(request,true,await inspectActive()); activePending.current=null; }
               else if (request.type === 'preview') { await reply(request,true,previewActive(request.artboardId)); activePending.current=null; }
+              else if (request.type === 'measure') { await reply(request,true,await measureActive(request.items)); activePending.current=null; }
               else if (request.type === 'apply') {
                 const prepared = await prepareChange(request);
                 if (stopped) return;

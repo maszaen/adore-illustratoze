@@ -38,7 +38,8 @@ describe('live external agent bridge', () => {
     const client=new Client({name:'test',version:'1.0.0'});
     await client.connect(transport);
     try {
-      const list=await client.listTools(); expect(list.tools.map(t=>t.name)).toContain('adore_apply');
+      const list=await client.listTools(); expect(list.tools.map(t=>t.name)).toContain('adore_apply'); expect(list.tools.map(t=>t.name)).toContain('adore_measure_text');
+      const badMeasure=await client.callTool({name:'adore_measure_text',arguments:{items:[{text:'x',fontSize:12,color:'#000000'}]}}); expect(badMeasure.isError).toBe(true);
       const infoResult=await client.callTool({name:'adore_connection_info',arguments:{}});
       const info=JSON.parse(infoResult.content[0].text);
       const headers={Origin:origin,Authorization:`Bearer ${info.token}`};

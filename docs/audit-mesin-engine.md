@@ -4,6 +4,8 @@ Status: **audit, bukan daftar fitur selesai atau sertifikasi Illustrator**. Snap
 
 ## Update setelah audit
 
+**Render tahap 1** (rincian dan batas: `docs/perbaikan-render-tahap-1.md`): E03 (urutan layer raster/PDF) dan E11 (clipping group) diperbaiki di semua renderer. E06 (gradient/opacity/radius) diperbaiki untuk canvas, SVG, PNG dan PDF; teks bergradient di PDF masih warna stop pertama dengan warning. E14 diperbaiki untuk canvas/SVG/PNG (shadow, glow, blur, group/layer opacity, blend mode, multi fill/stroke); PDF belum punya efek dan opacity group-nya per objek, keduanya dengan warning. E07 sebagian: rotasi PDF diperbaiki dan karakter di luar font standar diganti `?` dengan warning, bukan crash; font tetap Helvetica. E09: outline memakai glyph font asli dengan semua contour, dan menolak bila file font tidak dimuat (tidak lagi membuat huruf rekaan). E04, E08, E10 belum disentuh. Bagian temuan di bawah tetap baseline sebelum perbaikan.
+
 Sebagian safety gate sudah dikerjakan pada branch ini: E01 parser hang dan E05 fallback raster ekspor ditangani; E02 autosave/recovery diperkuat **sebagian**, tetapi belum aman untuk konflik dua tab, crash sebelum async selesai, atau diverifikasi pada browser nyata. Rincian perubahan, tes, dan batas terbaru ada di `docs/perbaikan-safety-tahap-1.md`. Bagian E01/E02/E05 di bawah adalah bukti baseline sebelum fix, bukan klaim bahwa semua gejalanya tetap ada. Test parser dan raster yang dahulu karakterisasi defect kini diubah menjadi regression perilaku benar.
 
 ## Cara membaca bukti

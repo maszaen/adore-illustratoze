@@ -30,6 +30,7 @@ import {
   splitPathAtAnchor,
 } from '../../core/math/bezier';
 import { applyColorTint } from '../../core/math/color';
+import { nodeEffectBounds, resolveClipMask, resolveEffects } from '../../core/render/appearance';
 import { RulersAndGuides } from './RulersAndGuides';
 import { GradientAnnotator } from './GradientAnnotator';
 import { PerspectiveGridOverlay } from './PerspectiveGridOverlay';
@@ -2084,51 +2085,59 @@ export const StudioCanvas: React.FC = () => {
         }
       }
 
-      // Live Effect SVG filters (Drop Shadow, Gaussian Blur, Feather, Outer Glow)
-      const enabledEffects = (node.effects || []).filter((fx) => fx.enabled);
-      if (enabledEffects.length > 0) {
-        const dropShadow = enabledEffects.find((fx) => fx.type === 'drop-shadow');
-        const blurFx = enabledEffects.find(
-          (fx) => fx.type === 'gaussian-blur' || fx.type === 'feather' || fx.type === 'radial-blur'
+      // Live Effect SVG filters (Drop Shadow, Gaussian Blur, Feather, Outer Glow).
+      // Parameters and region come from the shared resolver so SVG/raster exports match this view.
+      const resolvedFx = resolveEffects(node);
+      const fxRegion = resolvedFx ? nodeEffectBounds(node, doc.nodes) : null;
+      if (resolvedFx && fxRegion) {
+        filters.push(
+          <filter
+            key={`fx-${node.id}`}
+            id={`fx-${node.id}`}
+            filterUnits="userSpaceOnUse"
+            x={fxRegion.x}
+            y={fxRegion.y}
+            width={fxRegion.width}
+            height={fxRegion.height}
+            colorInterpolationFilters="sRGB"
+          >
+            {resolvedFx.dropShadow && (
+              <feDropShadow
+                dx={resolvedFx.dropShadow.dx}
+                dy={resolvedFx.dropShadow.dy}
+                stdDeviation={resolvedFx.dropShadow.blur}
+                floodColor={resolvedFx.dropShadow.color}
+                floodOpacity={resolvedFx.dropShadow.opacity}
+              />
+            )}
+            {resolvedFx.glow && (
+              <feDropShadow
+                dx={0}
+                dy={0}
+                stdDeviation={resolvedFx.glow.blur}
+                floodColor={resolvedFx.glow.color}
+                floodOpacity={resolvedFx.glow.opacity}
+              />
+            )}
+            {resolvedFx.blur && <feGaussianBlur stdDeviation={resolvedFx.blur.radius} />}
+          </filter>
         );
-        const glowFx = enabledEffects.find(
-          (fx) => fx.type === 'outer-glow' || fx.type === 'inner-glow'
-        );
+      }
 
-        if (dropShadow || blurFx || glowFx) {
-          filters.push(
-            <filter
-              key={`fx-${node.id}`}
-              id={`fx-${node.id}`}
-              x="-40%"
-              y="-40%"
-              width="180%"
-              height="180%"
-            >
-              {dropShadow && (
-                <feDropShadow
-                  dx={Number(dropShadow.params?.offsetX ?? 6)}
-                  dy={Number(dropShadow.params?.offsetY ?? 6)}
-                  stdDeviation={Number(dropShadow.params?.blur ?? 6)}
-                  floodColor={String(dropShadow.params?.color ?? '#000000')}
-                  floodOpacity={Number(dropShadow.params?.opacity ?? 0.55)}
-                />
-              )}
-              {glowFx && (
-                <feDropShadow
-                  dx={0}
-                  dy={0}
-                  stdDeviation={Number(glowFx.params?.blur ?? 10)}
-                  floodColor={String(glowFx.params?.color ?? '#38bdf8')}
-                  floodOpacity={Number(glowFx.params?.opacity ?? 0.85)}
-                />
-              )}
-              {blurFx && (
-                <feGaussianBlur stdDeviation={Number(blurFx.params?.radius ?? 6)} />
-              )}
-            </filter>
-          );
-        }
+      // Clipping masks: the top-most child of a clipping group defines the clip shape.
+      const clipMask = resolveClipMask(node, doc.nodes);
+      if (clipMask) {
+        const clipCx = clipMask.mask.x + clipMask.mask.width / 2;
+        const clipCy = clipMask.mask.y + clipMask.mask.height / 2;
+        filters.push(
+          <clipPath key={`clip-${node.id}`} id={`clip-${node.id}`}>
+            <path
+              d={generateNodeSvgPath(clipMask.mask, doc.nodes)}
+              clipRule={clipMask.mask.fillRule === 'evenodd' ? 'evenodd' : 'nonzero'}
+              transform={clipMask.mask.rotation ? `rotate(${clipMask.mask.rotation} ${clipCx} ${clipCy})` : undefined}
+            />
+          </clipPath>
+        );
       }
     }
 
@@ -2185,13 +2194,16 @@ export const StudioCanvas: React.FC = () => {
 
     // Group / Clipping Group container
     if (node.type === 'group' || node.type === 'clipping-group' || node.type === 'blend') {
-      const children = (node.children || [])
-        .map((cid) => doc.nodes[cid])
+      const clip = resolveClipMask(node, doc.nodes);
+      const children = (clip ? clip.content : (node.children || []).map((cid) => doc.nodes[cid]))
         .filter(Boolean);
+      const groupFilter = resolveEffects(node) ? `url(#fx-${node.id})` : undefined;
       return (
         <g
           key={node.id}
           opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          filter={groupFilter}
+          style={node.blendMode && node.blendMode !== 'normal' ? { mixBlendMode: node.blendMode as any } : undefined}
           data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
           onDoubleClick={(e) => {
@@ -2203,7 +2215,9 @@ export const StudioCanvas: React.FC = () => {
             <g pointerEvents={activeTool === 'direct-select' || activeTool === 'group-select' || isolationGroupId === node.id ? 'auto' : 'none'}>{renderVectorNode(children[0], layerOutlineMode)}</g>
             <g pointerEvents="none">{blendIntermediateNodes(node, doc.nodes).map(ch => renderVectorNode(ch, layerOutlineMode))}</g>
             <g pointerEvents={activeTool === 'direct-select' || activeTool === 'group-select' || isolationGroupId === node.id ? 'auto' : 'none'}>{renderVectorNode(children[1], layerOutlineMode)}</g>
-          </> : children.map((ch) => renderVectorNode(ch, layerOutlineMode))}
+          </> : clip ? (
+            <g clipPath={`url(#clip-${node.id})`}>{children.map((ch) => renderVectorNode(ch, layerOutlineMode))}</g>
+          ) : children.map((ch) => renderVectorNode(ch, layerOutlineMode))}
         </g>
       );
     }
@@ -2260,12 +2274,7 @@ export const StudioCanvas: React.FC = () => {
       );
     }
 
-    const hasSvgFilter = (node.effects || []).some(
-      (fx) =>
-        fx.enabled &&
-        ['drop-shadow', 'gaussian-blur', 'feather', 'outer-glow', 'inner-glow'].includes(fx.type)
-    );
-    const filterUrl = hasSvgFilter ? `url(#fx-${node.id})` : undefined;
+    const filterUrl = resolveEffects(node) ? `url(#fx-${node.id})` : undefined;
 
     // 1. Raster Image Node
     if (node.type === 'image' && node.imageUrl) {

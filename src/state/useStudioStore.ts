@@ -1,6 +1,8 @@
 import { selectionNodeBounds } from '../core/math/selectionResize';
 import { canBlend } from '../core/math/blend';
 import { fitPointTextFrame } from '../core/math/textLayout';
+import { isClipShape } from '../core/render/appearance';
+import { TextOutlineError, convertTextNodeToOutlineNodes } from '../core/io/opentypeHelper';
 import { create } from 'zustand';
 import type {
   ActiveModalType,
@@ -2584,45 +2586,114 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
 
   createOutlinesFromSelection: () => {
     const s = get();
-    if (s.selectedNodeIds.length === 0) return;
-    s.updateNodes(
-      s.selectedNodeIds,
-      (n) => {
-        if (n.type === 'text') {
-          n.type = 'compound-path';
-          n.name = `${n.textContent || 'Type'} (Outlines)`;
-          n.points = createRectangleAnchors(n.x, n.y, n.width, n.height, 4, 'round');
-          n.closed = true;
-        }
-      },
-      'Create Outlines (Shift+Ctrl+O)'
-    );
+    const current = s.getActiveDocument();
+    const textNodes = s.selectedNodeIds.map((id) => current.nodes[id]).filter((n) => n?.type === 'text' && !n.locked);
+    if (textNodes.length === 0) return;
+    // Convert everything first: if any text cannot be outlined, the document is left untouched.
+    const converted: ReturnType<typeof convertTextNodeToOutlineNodes>[] = [];
+    try {
+      for (const node of textNodes) {
+        let suffix = 'outlines', n = 1;
+        while (current.nodes[`${node.id}-${suffix}`]) suffix = `outlines-${++n}`;
+        converted.push(convertTextNodeToOutlineNodes(node, suffix));
+      }
+    } catch (error) {
+      if (!(error instanceof TextOutlineError)) throw error;
+      if (typeof window !== 'undefined' && typeof window.alert === 'function') window.alert(`Create Outlines was cancelled; your text was not changed.\n\n${error.message}`);
+      return;
+    }
+    const groupIds: string[] = [];
+    s.updateDocument((d) => {
+      converted.forEach(({ groupNode, childNodes }, i) => {
+        const original = d.nodes[textNodes[i].id];
+        if (!original) return;
+        const layer = d.layers.find((l) => l.id === original.layerId);
+        if (!layer) return;
+        childNodes.forEach((child) => { d.nodes[child.id] = child; });
+        d.nodes[groupNode.id] = groupNode;
+        const parent = original.parentId ? d.nodes[original.parentId] : undefined;
+        if (parent?.children) parent.children = parent.children.map((id) => (id === original.id ? groupNode.id : id));
+        const at = layer.nodeIds.indexOf(original.id);
+        if (at >= 0) layer.nodeIds.splice(at, 1, groupNode.id); else layer.nodeIds.push(groupNode.id);
+        delete d.nodes[original.id];
+        groupIds.push(groupNode.id);
+      });
+    }, 'Create Outlines (Shift+Ctrl+O)');
+    if (groupIds.length) s.selectNodes(groupIds, false);
   },
 
   makeClippingMask: () => {
     const s = get();
     if (s.selectedNodeIds.length < 2) return;
+    const current = s.getActiveDocument();
+    const picked = s.selectedNodeIds.map((id) => current.nodes[id]).filter(Boolean);
+    const notify = (message: string) => { if (typeof window !== 'undefined' && typeof window.alert === 'function') window.alert(message); };
+    if (picked.length < 2) return;
+    if (picked.some((n) => n.parentId || n.locked)) {
+      notify('Clipping mask needs unlocked top-level objects. Release them from their group first.');
+      return;
+    }
+    const layer = current.layers.find((l) => l.id === picked[0].layerId);
+    if (!layer || picked.some((n) => n.layerId !== layer.id) || layer.locked) {
+      notify('Clipping mask needs objects on the same unlocked layer.');
+      return;
+    }
+    // Stacking order, bottom to top: the top-most selected object becomes the mask.
+    const ordered = [...picked].sort((a, b) => layer.nodeIds.indexOf(a.id) - layer.nodeIds.indexOf(b.id));
+    const mask = ordered[ordered.length - 1];
+    if (!isClipShape(mask)) {
+      notify('The top-most object must be a path or shape to act as a clipping mask.');
+      return;
+    }
     let clipGroupId = '';
     s.updateDocument((d) => {
-      const nodes = s.selectedNodeIds.map((id) => d.nodes[id]).filter(Boolean);
-      if (nodes.length < 2) return;
-      const topMask = nodes[nodes.length - 1];
+      const targetLayer = d.layers.find((l) => l.id === layer.id);
+      if (!targetLayer) return;
       clipGroupId = makeAnchorId('clipgrp');
-      const layer = d.layers.find((l) => l.id === topMask.layerId) || d.layers[0];
       d.nodes[clipGroupId] = {
-        ...topMask,
         id: clipGroupId,
         name: '<Clipping Group>',
         type: 'clipping-group',
-        children: nodes.map((n) => n.id),
+        layerId: layer.id,
+        visible: true,
+        locked: false,
+        x: mask.x,
+        y: mask.y,
+        width: Math.max(1, mask.width),
+        height: Math.max(1, mask.height),
+        rotation: 0,
+        points: [],
+        closed: true,
+        children: ordered.map((n) => n.id),
+        fills: [],
+        strokes: [],
+        effects: [],
+        opacity: 1,
+        blendMode: 'normal',
       };
-      layer.nodeIds.push(clipGroupId);
+      for (const n of ordered) d.nodes[n.id].parentId = clipGroupId;
+      const topIndex = Math.max(...ordered.map((n) => targetLayer.nodeIds.indexOf(n.id)));
+      targetLayer.nodeIds.splice(topIndex + 1, 0, clipGroupId);
     }, 'Make Clipping Mask (Ctrl+7)');
     if (clipGroupId) s.selectNodes([clipGroupId], false);
   },
 
   releaseClippingMask: () => {
-    get().ungroupSelection();
+    const s = get();
+    const doc = s.getActiveDocument();
+    const maskIds = s.selectedNodeIds
+      .map((id) => doc.nodes[id])
+      .filter((n) => n?.type === 'clipping-group' && n.children?.length)
+      .map((n) => n.children![n.children!.length - 1]);
+    // Like Illustrator, the released mask path keeps its shape but loses its fill and stroke.
+    if (maskIds.length) {
+      s.updateDocument((d) => {
+        for (const id of maskIds) {
+          if (d.nodes[id]) { d.nodes[id].fills = []; d.nodes[id].strokes = []; }
+        }
+      }, 'Release Clipping Mask');
+    }
+    s.ungroupSelection();
   },
 
   makeCompoundPath: () => {

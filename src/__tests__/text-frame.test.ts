@@ -95,7 +95,7 @@ describe('Text frame fitting', () => {
     const ops = new TextDecoder().decode(decodePDFRawStream(stream).decode());
     expect(/\bW\s+n\b/.test(ops)).toBe(mode === 'area');
     expect(ops).toMatch(/\bTj\b/);
-  });
+  }, 20000); // mounts the full StudioCanvas in jsdom; takes ~3–5 s on a loaded machine
 
   it('includes overhanging glyph ink and legacy overflow in point text asset bounds', () => {
     const base = textNode();

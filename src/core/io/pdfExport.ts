@@ -1,9 +1,7 @@
-import { blendIntermediateNodes } from '../math/blend';
-import { clipsTextToFrame, layoutText, textGlyphTransform } from '../math/textLayout';
-import { PDFDocument, StandardFonts, rgb, pushGraphicsState, popGraphicsState, rectangle, clip, endPath, concatTransformationMatrix } from 'pdf-lib';
-import type { ArtboardItem, StudioDocument, VectorNode } from '../types';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import type { ArtboardItem, StudioDocument } from '../types';
 import { hexToRgb } from '../math/color';
-import { anchorPointsToSvgPathD } from './svgIo';
+import { renderNodesToPdfPage } from './pdfRender';
 
 export interface PdfExportOptions {
   artboardIds?: string[];
@@ -20,6 +18,8 @@ export interface PdfExportOptions {
   pageInformation: boolean;
   markWeightPt: number;
   markOffsetPt: number;
+  /** Called (once per distinct message) for artwork the PDF cannot reproduce faithfully. */
+  onWarning?: (message: string) => void;
 }
 
 export const DEFAULT_PDF_EXPORT_OPTIONS: PdfExportOptions = {
@@ -49,6 +49,13 @@ export async function exportDocumentToPdfBytes(
   const opts: PdfExportOptions = {
     ...DEFAULT_PDF_EXPORT_OPTIONS,
     ...partialOptions,
+  };
+
+  const seenWarnings = new Set<string>();
+  const warn = (message: string) => {
+    if (seenWarnings.has(message)) return;
+    seenWarnings.add(message);
+    opts.onWarning?.(message);
   };
 
   const pdfDoc = await PDFDocument.create();
@@ -90,25 +97,6 @@ export async function exportDocumentToPdfBytes(
     opts.trimMarks || opts.registrationMarks || opts.colorBars || opts.pageInformation;
   const marksMargin = hasPrinterMarks ? 36 : 0;
 
-  const nodesMap = doc.nodes || {};
-  const orderedRootNodes: VectorNode[] = [];
-  for (const layer of doc.layers || []) {
-    if (!layer.visible) continue;
-    for (const nid of layer.nodeIds || []) {
-      const n = nodesMap[nid];
-      if (n && n.visible && !n.parentId && !n.isGuide) {
-        orderedRootNodes.push(n);
-      }
-    }
-  }
-  if (orderedRootNodes.length === 0) {
-    for (const n of Object.values(nodesMap)) {
-      if (n && n.visible && !n.parentId && !n.isGuide && !(doc.layers || []).some(layer => layer.nodeIds?.includes(n.id))) {
-        orderedRootNodes.push(n);
-      }
-    }
-  }
-
   for (let pageIdx = 0; pageIdx < artboardsToExport.length; pageIdx++) {
     const ab = artboardsToExport[pageIdx];
     const trimW = Math.max(10, ab.width);
@@ -139,134 +127,12 @@ export async function exportDocumentToPdfBytes(
       color: ab.backgroundColor ? hexToPdfRgb(ab.backgroundColor) : rgb(1, 1, 1),
     });
 
-    // Helper to map canvas (x, y) to PDF page (x, y)
-    const toPdfX = (canvasX: number) => trimLeftPdfX + (canvasX - ab.x);
-    const toPdfY = (canvasY: number) => trimTopPdfY - (canvasY - ab.y);
-
-    const drawVectorNodeOnPage = (node: VectorNode) => {
-      if (!node || !node.visible || node.isGuide) return;
-
-      if (node.type === 'blend' && node.children?.length === 2) {
-        const endpoints = node.children.map(id => nodesMap[id]);
-        if (endpoints.every(Boolean)) {
-          [endpoints[0], ...blendIntermediateNodes(node, nodesMap), endpoints[1]].forEach(drawVectorNodeOnPage);
-        }
-        return;
-      }
-
-      if (node.children && node.children.length > 0) {
-        for (const cid of node.children) {
-          const child = nodesMap[cid];
-          if (child) drawVectorNodeOnPage(child);
-        }
-        if (node.type === 'group') return;
-      }
-
-      const primaryFill = (node.fills || []).find((f) => f.visible && f.type !== 'none');
-      const primaryStroke = (node.strokes || []).find((s) => s.visible && s.weight > 0);
-
-      const fillColor = primaryFill ? hexToPdfRgb(primaryFill.color || '#000000') : undefined;
-      const fillOpacity = primaryFill ? (primaryFill.opacity ?? 1) * (node.opacity ?? 1) : 0;
-
-      const borderColor = primaryStroke
-        ? hexToPdfRgb(primaryStroke.color || '#000000')
-        : undefined;
-      const borderWidth = primaryStroke ? primaryStroke.weight : 0;
-      const borderOpacity = primaryStroke
-        ? (primaryStroke.opacity ?? 1) * (node.opacity ?? 1)
-        : 0;
-
-      if (node.type === 'text') {
-        const layout = layoutText(node);
-        const isBold = node.textStyle?.fontStyle?.toLowerCase().includes('bold');
-        const font = isBold ? helveticaBold : helvetica;
-        page.pushOperators(pushGraphicsState());
-        if (clipsTextToFrame(node)) {
-          page.pushOperators(rectangle(toPdfX(node.x), toPdfY(node.y + node.height), Math.max(0, node.width), Math.max(0, node.height)), clip(), endPath());
-        }
-        const glyph = textGlyphTransform(node);
-        const ax = toPdfX(node.x), ay = toPdfY(node.y);
-        page.pushOperators(concatTransformationMatrix(glyph.sx, 0, 0, glyph.sy,
-          ax * (1 - glyph.sx) + (glyph.sx < 0 ? node.width : 0),
-          ay * (1 - glyph.sy) - (glyph.sy < 0 ? node.height : 0)));
-        if (primaryFill && fillOpacity > 0) layout.lines.forEach((line, lineIdx) => {
-          const textWidth = font.widthOfTextAtSize(line, layout.fontSize);
-          const x = layout.x - (layout.align === 'center' ? textWidth / 2 : layout.align === 'right' ? textWidth : 0);
-          page.drawText(line, {
-            x: toPdfX(x), y: toPdfY(layout.y + lineIdx * layout.leading),
-            size: layout.fontSize, font, color: fillColor || rgb(0, 0, 0), opacity: fillOpacity,
-          });
-        });
-        page.pushOperators(popGraphicsState());
-        return;
-      }
-
-      if (node.type === 'ellipse' && (!node.points || node.points.length === 0)) {
-        const rx = node.width / 2;
-        const ry = node.height / 2;
-        page.drawEllipse({
-          x: toPdfX(node.x + rx),
-          y: toPdfY(node.y + ry),
-          xScale: rx,
-          yScale: ry,
-          color: fillColor,
-          opacity: fillOpacity,
-          borderColor,
-          borderWidth,
-          borderOpacity,
-        });
-        return;
-      }
-
-      if (node.type === 'rectangle' && (!node.points || node.points.length === 0)) {
-        page.drawRectangle({
-          x: toPdfX(node.x),
-          y: toPdfY(node.y + node.height),
-          width: node.width,
-          height: node.height,
-          color: fillColor,
-          opacity: fillOpacity,
-          borderColor,
-          borderWidth,
-          borderOpacity,
-        });
-        return;
-      }
-
-      if (node.points && node.points.length >= 2) {
-        // Transform anchor points relative to artboard top-left so drawSvgPath places them accurately
-        const localPoints = node.points.map((pt) => ({
-          ...pt,
-          x: pt.x - ab.x,
-          y: pt.y - ab.y,
-          handleIn: pt.handleIn
-            ? { x: pt.handleIn.x - ab.x, y: pt.handleIn.y - ab.y }
-            : undefined,
-          handleOut: pt.handleOut
-            ? { x: pt.handleOut.x - ab.x, y: pt.handleOut.y - ab.y }
-            : undefined,
-        }));
-        const svgPathD = anchorPointsToSvgPathD(
-          localPoints,
-          node.closed !== false && node.type !== 'line'
-        );
-        if (svgPathD) {
-          page.drawSvgPath(svgPathD, {
-            x: trimLeftPdfX,
-            y: trimTopPdfY,
-            color: node.closed !== false && node.type !== 'line' ? fillColor : undefined,
-            opacity: fillOpacity,
-            borderColor,
-            borderWidth,
-            borderOpacity,
-          });
-        }
-      }
-    };
-
-    for (const node of orderedRootNodes) {
-      drawVectorNodeOnPage(node);
-    }
+    renderNodesToPdfPage({
+      pdfDoc, page, doc, artboard: ab,
+      originX: trimLeftPdfX, originY: trimTopPdfY,
+      fonts: { regular: helvetica, bold: helveticaBold },
+      warn,
+    });
 
     // Draw Printer Marks if enabled
     const markColor = rgb(0, 0, 0);

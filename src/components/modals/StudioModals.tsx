@@ -384,16 +384,19 @@ export const StudioModals: React.FC = () => {
     }
   }, [activeModal]);
 
-  const liveSvgCode = useMemo(() => {
-    if (activeModal !== 'export-svg') return '';
-    return exportDocumentToSvgString(doc, {
+  const liveSvg = useMemo(() => {
+    if (activeModal !== 'export-svg') return { code: '', warnings: [] as string[] };
+    const warnings = new Set<string>();
+    const code = exportDocumentToSvgString(doc, {
       styling: svgStyling,
       fontMode: svgFontMode,
       decimalPlaces: svgDecimals,
       objectIds: svgObjIds,
       minify: svgMinify,
       responsive: svgResponsive,
+      onWarning: (message) => warnings.add(message),
     });
+    return { code, warnings: [...warnings] };
   }, [
     activeModal,
     doc,
@@ -404,6 +407,9 @@ export const StudioModals: React.FC = () => {
     svgMinify,
     svgResponsive,
   ]);
+  const liveSvgCode = liveSvg.code;
+  const [pdfNotes, setPdfNotes] = useState<string[]>([]);
+  useEffect(() => { setPdfNotes([]); }, [activeModal]);
 
   if (!activeModal) return null;
 
@@ -1682,13 +1688,21 @@ export const StudioModals: React.FC = () => {
             </div>
           </div>
 
+          {pdfNotes.length > 0 && (
+            <div role="status" style={{ margin: '0 18px 10px', padding: 8, border: '1px solid #ff9a00', borderRadius: 4, fontSize: 11, maxHeight: 120, overflow: 'auto' }}>
+              <strong>PDF saved, but it differs from the canvas:</strong>
+              <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>{pdfNotes.map((note) => <li key={note}>{note}</li>)}</ul>
+            </div>
+          )}
           <div style={modalFooterStyle}>
             <button onClick={closeModal} style={secondaryBtnStyle}>
-              Cancel
+              {pdfNotes.length > 0 ? 'Close' : 'Cancel'}
             </button>
             <button
               onClick={async () => {
+                const notes = new Set<string>();
                 const bytes = await exportDocumentToPdfBytes(doc, {
+                  onWarning: (message) => notes.add(message),
                   useDocumentBleed: pdfUseDocBleed,
                   customBleed: {
                     top: pdfCustomBleed,
@@ -1705,7 +1719,8 @@ export const StudioModals: React.FC = () => {
                   bytes,
                   `${(doc.name || 'print-ready').replace(/\.adloze$/i, '')}.pdf`
                 );
-                closeModal();
+                // Keep the dialog open when the PDF differs from the canvas, so the user can read why.
+                if (notes.size) setPdfNotes([...notes]); else closeModal();
               }}
               style={primaryBtnStyle}
             >
@@ -1800,6 +1815,12 @@ export const StudioModals: React.FC = () => {
               </label>
             </div>
 
+            {liveSvg.warnings.length > 0 && (
+              <div role="status" style={{ padding: 8, border: '1px solid #ff9a00', borderRadius: 4, fontSize: 11, maxHeight: 96, overflow: 'auto' }}>
+                <strong>Not exported as drawn:</strong>
+                <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>{liveSvg.warnings.map((note) => <li key={note}>{note}</li>)}</ul>
+              </div>
+            )}
             {showSvgCode && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
