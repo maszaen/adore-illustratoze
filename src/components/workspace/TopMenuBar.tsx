@@ -245,25 +245,6 @@ export const TopMenuBar: React.FC = () => {
     });
   };
 
-  const handleSetTheme = (theme: UIThemeBrightness) => {
-    document.documentElement.setAttribute('data-ui-theme', theme);
-    if (typeof store.setUIBrightness === 'function') {
-      store.setUIBrightness(theme);
-    } else if (typeof store.setUITheme === 'function') {
-      store.setUITheme(theme);
-    } else {
-      useStudioStore.setState({ uiBrightness: theme, uiTheme: theme } as any);
-    }
-  };
-
-  const handleSetLanguage = (lang: Language) => {
-    if (typeof store.setLanguage === 'function') {
-      store.setLanguage(lang);
-    } else {
-      useStudioStore.setState({ language: lang } as any);
-    }
-  };
-
   const handleSwitchWorkspace = (wsId: string) => {
     if (wsId === 'reset') {
       resetWorkspaceChrome(activeWorkspace);
@@ -1099,7 +1080,7 @@ export const TopMenuBar: React.FC = () => {
           ))}
         </div>
 
-        {/* Right: GPU Indicator, Language Switcher, UI Brightness Quick Toggle, Workspace Switcher */}
+        {/* Right: View Mode Indicator and Workspace Switcher */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {/* GPU Preview Badge */}
           <span
@@ -1115,81 +1096,6 @@ export const TopMenuBar: React.FC = () => {
           >
             {viewMode === 'outline' ? 'Outline' : 'Preview'}
           </span>
-
-          {/* Language Switcher (ID / EN) */}
-          <div
-            style={{
-              display: 'inline-flex',
-              border: '1px solid var(--ai-border-input)',
-              borderRadius: 2,
-              overflow: 'hidden',
-            }}
-          >
-            {(['en', 'id'] as const).map((lang) => (
-              <button
-                key={lang}
-                type="button"
-                onClick={() => handleSetLanguage(lang)}
-                title={`Switch UI Language to ${lang.toUpperCase()}`}
-                style={{
-                  height: 19,
-                  padding: '0 5px',
-                  fontSize: 10,
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  border: 'none',
-                  cursor: 'pointer',
-                  backgroundColor:
-                    language === lang ? 'var(--ai-accent-blue)' : 'var(--ai-bg-input)',
-                  color: language === lang ? '#ffffff' : 'var(--ai-text-secondary)',
-                }}
-              >
-                {lang}
-              </button>
-            ))}
-          </div>
-
-          {/* 4-Stop Illustrator UI Brightness Theme Quick Selector */}
-          <div
-            title="Illustrator UI Brightness (Dark, Medium Dark, Medium Light, Light)"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 3,
-              padding: '2px 4px',
-              backgroundColor: 'var(--ai-bg-input)',
-              border: '1px solid var(--ai-border-input)',
-              borderRadius: 2,
-            }}
-          >
-            {(
-              [
-                { id: 'dark', hex: '#323232', label: 'Dark' },
-                { id: 'medium-dark', hex: '#535353', label: 'Medium Dark' },
-                { id: 'medium-light', hex: '#b8b8b8', label: 'Medium Light' },
-                { id: 'light', hex: '#f0f0f0', label: 'Light' },
-              ] as const
-            ).map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => handleSetTheme(t.id)}
-                title={`UI Brightness: ${t.label}`}
-                style={{
-                  width: 11,
-                  height: 11,
-                  padding: 0,
-                  borderRadius: 2,
-                  backgroundColor: t.hex,
-                  border:
-                    uiTheme === t.id
-                      ? '1.5px solid var(--ai-accent-blue)'
-                      : '1px solid #1a1a1a',
-                  cursor: 'pointer',
-                }}
-              />
-            ))}
-          </div>
 
           {/* Workspace Switcher Dropdown */}
           <select

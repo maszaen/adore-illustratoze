@@ -266,10 +266,10 @@ export const BottomStatusBar: React.FC = () => {
         >
           <span>{statusMessage}</span>
           <button
-            type="button"
+            type="button" aria-label="Dismiss status message"
             onClick={() => {
               if (typeof store.setStatusMessage === 'function') {
-                store.setStatusMessage(null);
+                store.setStatusMessage('');
               } else {
                 useStudioStore.setState({ statusMessage: null, warningMessage: null } as any);
               }

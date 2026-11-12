@@ -478,3 +478,35 @@ it('uses document icons in preset cards and keeps selection and orientation work
   }
   act(() => root.unmount()); host.remove(); useStudioStore.setState({ activeModal: null });
 });
+
+it('keeps theme and language in Preferences while removing the duplicate menu bar controls', async () => {
+  const { StudioModals } = await import('../components/modals/StudioModals');
+  const initial = { uiBrightness: useStudioStore.getState().uiBrightness, language: useStudioStore.getState().language };
+  useStudioStore.setState({ activeModal: 'preferences', language: 'en' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  await act(async () => root.render(<><TopMenuBar /><StudioModals /></>));
+  expect(host.querySelector('[title^="Switch UI Language to"]')).toBeNull();
+  expect(host.querySelector('[title^="UI Brightness:"]')).toBeNull();
+  expect(host.querySelector('[title="Switch Adobe Illustrator Workspace Layout"]')).not.toBeNull();
+  const light = [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(b => b.textContent === 'Light')!;
+  act(() => light.click()); expect(useStudioStore.getState().uiBrightness).toBe('light');
+  const languageSelect = [...host.querySelectorAll<HTMLSelectElement>('[role="dialog"] select')].find(s => [...s.options].some(o => o.value === 'id'))!;
+  act(() => { languageSelect.value = 'id'; languageSelect.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(useStudioStore.getState().language).toBe('id');
+  act(() => root.unmount()); host.remove();
+  useStudioStore.getState().setUIBrightness(initial.uiBrightness); useStudioStore.setState({ language: initial.language, activeModal: null });
+});
+
+it('starts without a promotional status and still displays and dismisses real status messages', async () => {
+  const { BottomStatusBar } = await import('../components/workspace/BottomStatusBar');
+  expect(useStudioStore.getInitialState().statusMessage).toBe('');
+  useStudioStore.setState({ statusMessage: '', screenMode: 'normal' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<BottomStatusBar />));
+  expect(host.querySelector('.ai-statusbar-message')).toBeNull();
+  act(() => useStudioStore.getState().setStatusMessage('Could not save document'));
+  expect(host.querySelector('.ai-statusbar-message')?.textContent).toContain('Could not save document');
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Dismiss status message"]')!.click());
+  expect(host.querySelector('.ai-statusbar-message')).toBeNull();
+  act(() => root.unmount()); host.remove();
+});

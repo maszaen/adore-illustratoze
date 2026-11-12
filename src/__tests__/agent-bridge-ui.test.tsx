@@ -37,3 +37,46 @@ it('requires pairing and explicit approval before applying a proposal', async ()
   expect(replies[0].ok).toBe(true);
   await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals();
 });
+
+it('wraps the panel text despite the status bar, explains setup, and keeps keyboard events in the panel', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css=readFileSync('src/styles/illustrator-theme.css','utf8');
+  const wrapRule=css.match(/\.ai-agent-popover \{ box-sizing: border-box; white-space: normal;[^}]+\}/)?.[0];
+  expect(wrapRule).toBeTruthy();
+  const style=document.createElement('style'); style.textContent=`.ai-statusbar { white-space: nowrap; } ${wrapRule}`; document.head.appendChild(style);
+  const host=document.createElement('div'); host.className='ai-statusbar'; document.body.appendChild(host); const root=createRoot(host);
+  act(()=>root.render(<AgentBridge/>));
+  const trigger=host.querySelector<HTMLButtonElement>('.ai-agent-trigger')!;
+  act(()=>trigger.click());
+  const panel=host.querySelector<HTMLElement>('.ai-agent-popover')!;
+  expect(getComputedStyle(panel).whiteSpace).toBe('normal');
+  expect(panel.textContent).toContain('Connect only an agent you trust');
+  expect(panel.textContent).toContain('adore_connection_info');
+  expect(panel.textContent).toContain(window.location.origin);
+  expect(panel.textContent).toContain('not an agent or a connection address');
+  expect(panel.textContent).toContain('a remote agent or hosting server does not share its localhost');
+  expect(panel.textContent).toContain('Browser or network security settings may block');
+  expect(trigger.getAttribute('aria-expanded')).toBe('true');
+  const keyHandler=vi.fn(); window.addEventListener('keydown',keyHandler);
+  act(()=>panel.dispatchEvent(new KeyboardEvent('keydown',{key:'v',bubbles:true})));
+  expect(keyHandler).not.toHaveBeenCalled();
+  act(()=>panel.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})));
+  expect(host.querySelector('.ai-agent-popover')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  window.removeEventListener('keydown',keyHandler);act(()=>root.unmount());host.remove();style.remove();
+});
+
+it('shows a helpful error and refuses non-local bridge URLs without making a request', async () => {
+  useStudioStore.getState().openDocument(createDefaultDocument({includeSampleArtwork:false}));
+  const fetchMock=vi.fn(); vi.stubGlobal('fetch',fetchMock);
+  const host=document.createElement('div');document.body.appendChild(host);const root=createRoot(host);
+  act(()=>root.render(<AgentBridge/>));
+  act(()=>host.querySelector<HTMLButtonElement>('.ai-agent-trigger')!.click());
+  const inputs=host.querySelectorAll<HTMLInputElement>('input');
+  const setInput=(input:HTMLInputElement,value:string)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};
+  act(()=>{setInput(inputs[0],'https://example.com:1234');setInput(inputs[1],'a'.repeat(64));});
+  await act(async()=>host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('localhost');
+  expect(fetchMock).not.toHaveBeenCalled();
+  act(()=>root.unmount());host.remove();vi.unstubAllGlobals();
+});

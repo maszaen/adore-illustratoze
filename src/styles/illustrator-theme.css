@@ -958,3 +958,21 @@ textarea {
 .ai-agent-proposal pre { max-height:130px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:8px; background:var(--ai-bg-app); font-size:10px; }
 .ai-agent-actions { display:flex; justify-content:flex-end; gap:8px; }
 .ai-agent-approve { background:var(--ai-accent-blue) !important; color:#fff !important; }
+
+/* The status bar is intentionally nowrap; its floating agent panel must not inherit it. */
+.ai-agent-popover { box-sizing: border-box; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+.ai-agent-popover *, .ai-agent-popover *::before, .ai-agent-popover *::after { box-sizing: border-box; }
+.ai-agent-popover header > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.ai-agent-badge { padding: 2px 7px; border-radius: 999px; background: var(--ai-bg-app); color: var(--ai-text-secondary); font-size: 10px; font-weight: 500; }
+.ai-agent-badge.is-connected { color: var(--ai-text-primary); border: 1px solid var(--ai-border-subtle); }
+.ai-agent-help { background: var(--ai-bg-app); border: 1px solid var(--ai-border-subtle); border-radius: 5px; margin: 12px 0; }
+.ai-agent-help summary { padding: 8px 10px; color: var(--ai-text-primary); cursor: pointer; }
+.ai-agent-help p { margin: 0; padding: 0 12px 10px; color: var(--ai-text-secondary); }
+.ai-agent-help ol { padding: 0 12px 0 28px; margin: 0 0 10px; color: var(--ai-text-secondary); }
+.ai-agent-help li + li { margin-top: 6px; }
+.ai-agent-popover code { color: var(--ai-text-primary); overflow-wrap: anywhere; }
+.ai-agent-connect { min-width: 86px; }
+.ai-agent-connection-address { font-size: 11px; }
+.ai-agent-popover :is(input,button):disabled { cursor: not-allowed; opacity: .6; }
+.ai-agent-actions { flex-wrap: wrap; }
+@media (max-width: 480px) { .ai-agent-popover { bottom: 26px; max-height: calc(100dvh - 36px); } }
