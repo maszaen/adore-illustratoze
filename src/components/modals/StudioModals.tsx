@@ -13,6 +13,8 @@ import {
   Sparkles,
   Printer,
   FileCode,
+  FilePenLine,
+  FileImage,
   Sliders,
   Keyboard,
   BarChart3,
@@ -30,7 +32,6 @@ import type {
   VectorNode,
 } from '../../core/types';
 import { NumericScrubInput } from '../primitives/NumericScrubInput';
-import { ArtboardPreview } from '../primitives/ArtboardPreview';
 import { AngleDial } from '../primitives/AngleDial';
 import {
   DOCUMENT_PRESETS,
@@ -495,8 +496,8 @@ export const StudioModals: React.FC = () => {
           1. NEW DOCUMENT MODAL
          ==================================================================== */}
       {activeModal === 'new-document' && (
-        <div className="ai-new-document" style={{ ...modalBoxStyle, width: 780 }}>
-          <div style={modalHeaderStyle}>
+        <div className="ai-new-document" style={{ ...modalBoxStyle, width: 900, height: 'min(620px, 90vh)' }}>
+          <div className="ai-new-document-header" style={modalHeaderStyle}>
             <span>New Document</span>
             <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
               <X size={15} />
@@ -504,48 +505,19 @@ export const StudioModals: React.FC = () => {
           </div>
 
           {/* Preset Categories */}
-          <div className="ai-new-document-categories"
-            style={{
-              display: 'flex',
-              gap: 6,
-              padding: '10px 18px',
-              background: 'var(--ai-bg-panel-header)',
-              borderBottom: '1px solid var(--ai-border-subtle)',
-            }}
-          >
+          <div className="ai-new-document-categories">
             {(['saved', 'mobile', 'web', 'print', 'film', 'art'] as const).map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setNewDocCat(cat)}
-                style={{
-                  padding: '5px 12px',
-                  borderRadius: 4,
-                  border: 'none',
-                  background: newDocCat === cat ? '#1473e6' : 'transparent',
-                  color: newDocCat === cat ? '#ffffff' : 'var(--ai-text-secondary)',
-                  fontWeight: newDocCat === cat ? 600 : 400,
-                  textTransform: 'capitalize',
-                  cursor: 'pointer',
-                }}
-              >
+              <button key={cat} type="button" aria-pressed={newDocCat === cat} onClick={() => setNewDocCat(cat)}>
                 {cat === 'film' ? 'Film & Video' : cat === 'art' ? 'Art & Illustration' : cat}
               </button>
             ))}
           </div>
 
-          <div className="ai-new-document-content" style={{ display: 'flex', padding: 18, gap: 18 }}>
+          <div className="ai-new-document-content">
             {/* Left: Preset Cards */}
-            <div className="ai-new-document-presets"
-              style={{
-                flex: 1,
-                display: 'grid',
-                gridTemplateColumns: 'repeat(2, 1fr)',
-                gap: 10,
-                maxHeight: 370,
-                overflowY: 'auto',
-                alignContent: 'start',
-              }}
-            >
+            <div className="ai-new-document-presets">
+              <h2 className="ai-new-document-preset-heading">{newDocCat === 'saved' ? 'Saved presets' : `${newDocCat === 'film' ? 'Film & Video' : newDocCat === 'art' ? 'Art & Illustration' : newDocCat} presets`}</h2>
+              <div className="ai-new-document-preset-grid">
               {newDocCat === 'saved' && savedPresets.length === 0 && <div style={{ color: 'var(--ai-text-secondary)', gridColumn: '1 / -1' }}>No saved presets yet.</div>}
               {newDocCat === 'saved' && savedPresets.map((preset) => (
                 <button className="ai-preset-card" key={preset.id} type="button" aria-pressed={selectedPresetId === preset.id} onClick={() => {
@@ -555,10 +527,10 @@ export const StudioModals: React.FC = () => {
                   setNewDocArtboards(preset.artboards); setNewDocOrientation(preset.orientation);
                   setNewDocBleedTop(preset.bleedTop); setNewDocBleedBottom(preset.bleedBottom);
                   setNewDocBleedLeft(preset.bleedLeft); setNewDocBleedRight(preset.bleedRight);
-                }} style={{ background: 'var(--ai-bg-panel-header)', color: 'var(--ai-text-primary)', textAlign: 'left', border: selectedPresetId === preset.id ? '1px solid #1473e6' : '1px solid var(--ai-border-subtle)', borderRadius: 6, padding: 12, cursor: 'pointer' }}>
-                  <ArtboardPreview width={preset.width} height={preset.height} compact />
-                  <div style={{ fontWeight: 600 }}>{preset.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 4 }}>{preset.width} × {preset.height} {preset.unit} · {preset.colorMode} ({preset.rasterPpi} ppi)</div>
+                }}>
+                  <FilePenLine className="ai-preset-icon" size={42} strokeWidth={1} aria-hidden="true" />
+                  <div className="ai-preset-name">{preset.name}</div>
+                  <div className="ai-preset-dimensions">{preset.width} × {preset.height} {preset.unit}</div>
                 </button>
               ))}
               {DOCUMENT_PRESETS.filter((p) => p.category === newDocCat).map(
@@ -566,37 +538,22 @@ export const StudioModals: React.FC = () => {
                   <button type="button" className="ai-preset-card"
                     key={preset.id} aria-pressed={selectedPresetId === preset.id}
                     onClick={() => applySelectedPreset(preset)}
-                    style={{
-                      background: 'var(--ai-bg-panel-header)',
-                      border:
-                        selectedPresetId === preset.id
-                          ? '1.5px solid #1473e6'
-                          : '1px solid var(--ai-border-subtle)',
-                      borderRadius: 6,
-                      padding: 12,
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      color: 'var(--ai-text-primary)',
-                    }}
                   >
-                    <ArtboardPreview width={preset.width} height={preset.height} compact />
-                    <div style={{ fontWeight: 600, color: 'var(--ai-text-primary)' }}>{preset.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 4 }}>
-                      {preset.width} × {preset.height} {preset.unit} • {preset.colorMode} ({preset.ppi}{' '}
-                      ppi)
-                    </div>
+                    {preset.category === 'print' || preset.category === 'art'
+                      ? <FileImage className="ai-preset-icon" size={42} strokeWidth={1} aria-hidden="true" />
+                      : <FilePenLine className="ai-preset-icon" size={42} strokeWidth={1} aria-hidden="true" />}
+                    <div className="ai-preset-name">{preset.name}</div>
+                    <div className="ai-preset-dimensions">{preset.width} × {preset.height} {preset.unit}</div>
                   </button>
                 )
               )}
+              </div>
             </div>
 
             {/* Right: Preset Details Inspector */}
             <div className="ai-new-document-details"
               style={{
-                width: 280,
                 background: 'var(--ai-bg-panel-header)',
-                border: '1px solid var(--ai-border-subtle)',
-                borderRadius: 6,
                 padding: 14,
                 display: 'flex',
                 flexDirection: 'column',
@@ -604,10 +561,7 @@ export const StudioModals: React.FC = () => {
               }}
             >
               <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--ai-text-primary)' }}>PRESET DETAILS</div>
-              <div className="ai-document-preview" aria-label={`Artboard preview: ${newDocW} by ${newDocH} ${newDocUnit}`}>
-                <ArtboardPreview width={newDocW} height={newDocH} />
-                <div>{newDocW} × {newDocH} {newDocUnit} · {newDocArtboards} {newDocArtboards === 1 ? 'artboard' : 'artboards'}</div>
-              </div>
+
 
               <div>
                 <label style={labelStyle}>Document Title</label>
@@ -817,7 +771,7 @@ export const StudioModals: React.FC = () => {
             </div>
           </div>
 
-          <div style={modalFooterStyle}>
+          <div className="ai-new-document-footer" style={modalFooterStyle}>
             <button onClick={closeModal} style={secondaryBtnStyle}>
               Cancel
             </button>

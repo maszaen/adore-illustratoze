@@ -1,5 +1,6 @@
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, X } from 'lucide-react';
 import React from 'react';
+import { AgentBridge } from '../agent/AgentBridge';
 import { useStudioStore } from '../../state/useStudioStore';
 import { getToolDefinition } from '../../core/tools/toolRegistry';
 import { ToolIcon } from '../primitives/IllustratorIcons';
@@ -112,6 +113,7 @@ export const BottomStatusBar: React.FC = () => {
     >
       {/* Left Cluster: Zoom Selector + Artboard Navigation */}
       <div className="ai-statusbar-left" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <AgentBridge />
         {/* Zoom Level Dropdown */}
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
           <select

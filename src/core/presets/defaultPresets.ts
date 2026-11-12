@@ -1,3 +1,4 @@
+import { populateStarterArtwork } from './starterArtwork';
 import type {
   ArtboardItem,
   BrushItem,
@@ -1220,79 +1221,27 @@ function structuredCloneSwatches(swatches: SwatchItem[]): SwatchItem[] {
 
 export const STARTER_TEMPLATES: StarterTemplateItem[] = [
   {
-    id: 'tpl-brand-grid',
-    name: 'Logo & Brand Identity Grid',
-    category: 'Branding & Identity',
-    description: 'Golden-ratio geometric construction grid with emblem lockup and global swatches.',
-    dimensionsLabel: '1200 × 800 px • RGB • 300 PPI',
-    colorMode: 'RGB',
-    previewAccent: '#ff9a00',
-    buildDocument: () =>
-      createDefaultDocument({
-        name: 'Brand-Identity-Master.adloze',
-        width: 1200,
-        height: 800,
-        unit: 'px',
-        colorMode: 'RGB',
-        includeSampleArtwork: true,
-      }),
+    id: 'tpl-brand-grid', name: 'Brand Identity Starter', category: 'Branding & Identity',
+    description: 'Editable emblem, wordmark and colour palette for a fictional outdoor brand.',
+    dimensionsLabel: '1200 × 800 px • RGB', colorMode: 'RGB', previewAccent: '#7fa897',
+    buildDocument: () => populateStarterArtwork(createDefaultDocument({ name: 'Brand-Identity-Starter.adloze', width: 1200, height: 800, unit: 'px', colorMode: 'RGB', includeSampleArtwork: false }), 'brand'),
   },
   {
-    id: 'tpl-isometric-poster',
-    name: 'Isometric Illustration Poster',
-    category: 'Art & Illustration',
-    description: 'Vibrant multi-layer geometric poster with 3D extrude effects and neon gradients.',
-    dimensionsLabel: '1000 × 1200 pt • RGB • 300 PPI',
-    colorMode: 'RGB',
-    previewAccent: '#00f2fe',
-    buildDocument: () => {
-      const doc = createDefaultDocument({
-        name: 'Isometric-Poster-Art.adloze',
-        width: 1000,
-        height: 1200,
-        unit: 'pt',
-        colorMode: 'RGB',
-        includeSampleArtwork: true,
-      });
-      return doc;
-    },
+    id: 'tpl-isometric-poster', name: 'Isometric Illustration Poster', category: 'Art & Illustration',
+    description: 'A colourful geometric poster with editable isometric shapes and typography.',
+    dimensionsLabel: '1000 × 1200 pt • RGB', colorMode: 'RGB', previewAccent: '#8fe2d8',
+    buildDocument: () => populateStarterArtwork(createDefaultDocument({ name: 'Isometric-Poster-Art.adloze', width: 1000, height: 1200, unit: 'pt', colorMode: 'RGB', includeSampleArtwork: false }), 'poster'),
   },
   {
-    id: 'tpl-packaging-dieline',
-    name: 'Packaging Box Die-Cut with Bleed',
-    category: 'Print & Packaging',
-    description: 'Print-ready CMYK dieline layout with 3mm bleed, trim marks, and spot color fold lines.',
-    dimensionsLabel: '297 × 210 mm (A4) • CMYK • 3mm Bleed',
-    colorMode: 'CMYK',
-    previewAccent: '#ec008c',
-    buildDocument: () =>
-      createDefaultDocument({
-        name: 'Packaging-Dieline-A4.adloze',
-        width: 297,
-        height: 210,
-        unit: 'mm',
-        colorMode: 'CMYK',
-        bleed: 3,
-        includeSampleArtwork: true,
-      }),
+    id: 'tpl-packaging-dieline', name: 'Packaging Box Study', category: 'Print & Packaging',
+    description: 'Editable box layout with cut and fold guides. Verify dimensions before production.',
+    dimensionsLabel: '297 × 210 mm • CMYK • 3 mm bleed', colorMode: 'CMYK', previewAccent: '#ec008c',
+    buildDocument: () => populateStarterArtwork(createDefaultDocument({ name: 'Packaging-Box-Study.adloze', width: 297, height: 210, unit: 'mm', colorMode: 'CMYK', bleed: 3, includeSampleArtwork: false }), 'packaging'),
   },
   {
-    id: 'tpl-icon-grid',
-    name: 'Icon Set Multi-Artboard Grid',
-    category: 'UI & Iconography',
-    description: '4 artboards configured for multi-scale 1x/2x/3x SVG & PNG Asset Export.',
-    dimensionsLabel: '4 Artboards • 512 × 512 px • RGB',
-    colorMode: 'RGB',
-    previewAccent: '#1473e6',
-    buildDocument: () =>
-      createDefaultDocument({
-        name: 'Icon-System-Set.adloze',
-        width: 512,
-        height: 512,
-        unit: 'px',
-        colorMode: 'RGB',
-        artboardCount: 4,
-        includeSampleArtwork: true,
-      }),
+    id: 'tpl-icon-grid', name: 'Icon Set Multi-Artboard Grid', category: 'UI & Iconography',
+    description: 'Four editable icons on separate artboards, ready to adapt for your project.',
+    dimensionsLabel: '4 artboards • 512 × 512 px • RGB', colorMode: 'RGB', previewAccent: '#1473e6',
+    buildDocument: () => populateStarterArtwork(createDefaultDocument({ name: 'Icon-System-Set.adloze', width: 512, height: 512, unit: 'px', colorMode: 'RGB', artboardCount: 4, includeSampleArtwork: false }), 'icons'),
   },
 ];

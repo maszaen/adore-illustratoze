@@ -1,0 +1,4 @@
+[
+  { "op": "update", "id": "headline", "text": "Kopi\nSenja.", "fill": "#8A493B" },
+  { "op": "update", "id": "sun", "x": 590, "y": 260, "fill": "#E4A581" }
+]

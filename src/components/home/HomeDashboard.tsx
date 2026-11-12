@@ -1,4 +1,3 @@
-import { ArtboardPreview } from '../primitives/ArtboardPreview';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FilePlus,
@@ -24,10 +23,8 @@ import {
 import { useStudioStore } from '../../state/useStudioStore';
 import type { StudioDocument } from '../../core/types';
 import {
-  DOCUMENT_PRESETS,
   STARTER_TEMPLATES,
   createDefaultDocument,
-  type DocumentPresetItem,
   type StarterTemplateItem,
 } from '../../core/presets/defaultPresets';
 import {
@@ -36,17 +33,14 @@ import {
   deleteProjectFromDb,
   duplicateProjectInDb,
   renameProjectInDb,
-  listCustomPresetsFromDb,
   getCrashRecoverySnapshot,
   clearCrashRecoverySnapshot,
   type StoredProjectRecord,
-  type CustomDocumentPreset,
 } from '../../core/io/db';
 import { exportDocumentAsAdlozeFile, importAdlozeFile } from '../../core/io/adlozeIo';
-import { parseSvgStringToVectorNodes } from '../../core/io/svgIo';
+import { exportDocumentToSvgString, parseSvgStringToVectorNodes } from '../../core/io/svgIo';
 
 type HomeNavTab = 'home' | 'projects' | 'templates';
-type PresetCategoryTab = 'saved' | 'mobile' | 'web' | 'print' | 'film' | 'art';
 
 export interface HomeDashboardProps {
   onClose?: () => void;
@@ -64,9 +58,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
   const lightTheme = store.uiBrightness === 'light' || store.uiBrightness === 'medium-light';
 
   const [navTab, setNavTab] = useState<HomeNavTab>('home');
-  const [presetCategory, setPresetCategory] = useState<PresetCategoryTab>('web');
   const [projects, setProjects] = useState<StoredProjectRecord[]>([]);
-  const [savedPresets, setSavedPresets] = useState<CustomDocumentPreset[]>([]);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'updated' | 'name' | 'artboards'>('updated');
@@ -82,13 +74,11 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refreshData = async () => {
-    const [projList, customList, recovery] = await Promise.all([
+    const [projList, recovery] = await Promise.all([
       listProjectsFromDb(),
-      listCustomPresetsFromDb(),
       getCrashRecoverySnapshot(),
     ]);
     setProjects(projList);
-    setSavedPresets(customList);
     if (recovery && recovery.dirty && recovery.document) {
       setRecoveryDoc({ document: recovery.document, savedAt: recovery.savedAt });
     }
@@ -142,36 +132,6 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
     } else {
       useStudioStore.setState({ activeModal: modalName } as any);
     }
-  };
-
-  const handleCreateFromPreset = async (preset: DocumentPresetItem) => {
-    const newDoc = createDefaultDocument({
-      name: `${preset.name.split('(')[0].trim()}.adloze`,
-      width: preset.width,
-      height: preset.height,
-      unit: preset.unit,
-      colorMode: preset.colorMode,
-      rasterPPI: preset.ppi,
-      artboardCount: preset.artboards,
-      bleed: preset.bleed,
-      includeSampleArtwork: false,
-    });
-    await enterStudioWithDocument(newDoc);
-  };
-
-  const handleCreateFromCustomPreset = async (preset: CustomDocumentPreset) => {
-    const newDoc = createDefaultDocument({
-      name: `${preset.name}.adloze`,
-      width: preset.width,
-      height: preset.height,
-      unit: preset.unit,
-      colorMode: preset.colorMode,
-      rasterPPI: preset.rasterPpi,
-      artboardCount: preset.artboards,
-      bleed: preset.bleedTop,
-      includeSampleArtwork: false,
-    });
-    await enterStudioWithDocument(newDoc);
   };
 
   const handleOpenStarterTemplate = async (tpl: StarterTemplateItem) => {
@@ -242,9 +202,11 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
     setRenamingId(null);
   };
 
-  const filteredPresets = useMemo(() => {
-    return DOCUMENT_PRESETS.filter((p) => p.category === presetCategory);
-  }, [presetCategory]);
+  const templatePreviews = useMemo(() => Object.fromEntries(STARTER_TEMPLATES.map(template => {
+    const document = template.buildDocument();
+    const svg = exportDocumentToSvgString(document, { responsive: true });
+    return [template.id, `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`];
+  })), []);
 
   const filteredProjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -288,7 +250,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
           display: 'flex',
           flexDirection: 'column',
           padding: '16px 12px',
-          gap: 6,
+          gap: 3,
           flexShrink: 0,
         }}
       >
@@ -345,7 +307,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             justifyContent: 'center',
             gap: 8,
             cursor: 'pointer',
-            marginBottom: 4,
+            marginBottom: 1,
           }}
         >
           <FilePlus size={15} />
@@ -367,7 +329,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             justifyContent: 'center',
             gap: 8,
             cursor: 'pointer',
-            marginBottom: 14,
+            marginBottom: 6,
           }}
         >
           <FolderOpen size={14} />
@@ -559,178 +521,6 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
           </div>
         )}
 
-        {/* QUICK PRESET BAR (Shown on Home tab) */}
-        {navTab === 'home' && (
-          <section className="ai-home-presets"
-            style={{
-              background: 'var(--ai-bg-header)',
-              border: '1px solid var(--ai-border-subtle)',
-              borderRadius: 8,
-              padding: '16px 20px',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: 12,
-                marginBottom: 14,
-              }}
-            >
-              <div>
-                <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--ai-text-primary)' }}>
-                  {language === 'id'
-                    ? 'Mulai Cepat dengan Preset Dokumen'
-                    : 'Start a New Vector Document'}
-                </h2>
-                <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 2 }}>
-                  {language === 'id' ? 'Pilih ukuran awal, atau buat dokumen sesuai kebutuhan.' : 'Choose a starting size, or create a custom document.'}
-                </div>
-              </div>
-
-              {/* Category Tabs */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, background: 'var(--ai-bg-app)', padding: 3, borderRadius: 6 }}>
-                {(
-                  [
-                    { id: 'saved', label: 'Saved' },
-                    { id: 'mobile', label: 'Mobile' },
-                    { id: 'web', label: 'Web' },
-                    { id: 'print', label: 'Print' },
-                    { id: 'film', label: 'Film & Video' },
-                    { id: 'art', label: 'Art & Illustration' },
-                  ] as const
-                ).map((cat) => (
-                  <button
-                    key={cat.id} aria-pressed={presetCategory === cat.id}
-                    onClick={() => setPresetCategory(cat.id)}
-                    style={{
-                      padding: '5px 11px',
-                      borderRadius: 4,
-                      border: 'none',
-                      background: presetCategory === cat.id ? '#1473e6' : 'transparent',
-                      color: presetCategory === cat.id ? '#ffffff' : 'var(--ai-text-secondary)',
-                      fontSize: 11,
-                      whiteSpace: 'nowrap',
-                      fontWeight: presetCategory === cat.id ? 600 : 400,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {cat.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Preset Cards Row */}
-            {presetCategory === 'saved' ? (
-              savedPresets.length === 0 ? (
-                <div
-                  style={{
-                    padding: '20px',
-                    textAlign: 'center',
-                    color: 'var(--ai-text-secondary)',
-                    border: '1px dashed #3f3f3f',
-                    borderRadius: 6,
-                  }}
-                >
-                  No custom presets saved yet. Click <strong>New document</strong> to save custom
-                  document presets.
-                </div>
-              ) : (
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(min(175px, 100%), 1fr))',
-                    gap: 12,
-                  }}
-                >
-                  {savedPresets.map((cp) => (
-                    <div
-                      key={cp.id} role="button" tabIndex={0} className="ai-home-card"
-                      onClick={() => handleCreateFromCustomPreset(cp)}
-                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void handleCreateFromCustomPreset(cp); } }}
-                      style={{
-                        background: 'var(--ai-bg-panel)',
-                        border: '1px solid var(--ai-border-subtle)',
-                        borderRadius: 6,
-                        padding: 12,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <ArtboardPreview width={cp.width} height={cp.height} compact />
-                      <div style={{ fontWeight: 600, color: 'var(--ai-text-primary)' }}>{cp.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 4 }}>
-                        {cp.width} × {cp.height} {cp.unit} • {cp.colorMode}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )
-            ) : (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(min(185px, 100%), 1fr))',
-                  gap: 12,
-                }}
-              >
-                {filteredPresets.map((preset) => (
-                  <div
-                    key={preset.id} role="button" tabIndex={0} className="ai-home-card"
-                    onClick={() => handleCreateFromPreset(preset)}
-                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void handleCreateFromPreset(preset); } }}
-                    style={{
-                      background: 'var(--ai-bg-panel)',
-                      border: '1px solid var(--ai-border-subtle)',
-                      borderRadius: 6,
-                      padding: '12px 14px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 6,
-                      transition: 'border-color 0.15s',
-                    }}
-                  >
-                    <ArtboardPreview width={preset.width} height={preset.height} compact />
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 700,
-                          padding: '2px 6px',
-                          borderRadius: 3,
-                          background: preset.colorMode === 'CMYK' ? '#3a2238' : '#1b2e44',
-                          color: preset.colorMode === 'CMYK' ? '#ff7be5' : '#64b5f6',
-                        }}
-                      >
-                        {preset.colorMode} • {preset.ppi} PPI
-                      </span>
-                      {preset.bleed > 0 && (
-                        <span style={{ fontSize: 10, color: '#ff6b6b' }}>
-                          Bleed {preset.bleed}
-                          {preset.unit}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--ai-text-primary)', marginTop: 2 }}>
-                      {preset.name}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>{preset.description}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
-
         {/* PROJECT LIST MANAGER (Shown on Home and My Projects tabs) */}
         {(navTab === 'home' || navTab === 'projects') && (
           <section className="ai-home-projects" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -903,6 +693,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                         justifyContent: 'center',
                         cursor: 'pointer',
                         overflow: 'hidden',
+                        borderTopLeftRadius: 7,
+                        borderTopRightRadius: 7,
                       }}
                     >
                       {proj.thumbnailDataUrl ? (
@@ -1151,7 +943,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                 </h3>
               </div>
               <span style={{ fontSize: 11, color: 'var(--ai-text-secondary)' }}>
-                One-click open complete multi-layer vector documents
+                Editable vector artwork to make your own
               </span>
             </div>
 
@@ -1189,33 +981,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
                       position: 'relative',
                     }}
                   >
-                    <svg width="96" height="72" viewBox="0 0 96 72">
-                      <rect
-                        x="12"
-                        y="10"
-                        width="72"
-                        height="52"
-                        rx="6"
-                        fill="none"
-                        stroke={tpl.previewAccent}
-                        strokeWidth="1.5"
-                        strokeDasharray="3 2"
-                      />
-                      <circle
-                        cx="48"
-                        cy="36"
-                        r="18"
-                        fill={tpl.previewAccent}
-                        fillOpacity="0.25"
-                        stroke={tpl.previewAccent}
-                        strokeWidth="1.5"
-                      />
-                      <polygon
-                        points="48,22 60,46 36,46"
-                        fill={tpl.previewAccent}
-                        opacity="0.85"
-                      />
-                    </svg>
+                    <img src={templatePreviews[tpl.id]} alt="" className="ai-home-template-preview" />
                     <span
                       style={{
                         position: 'absolute',
