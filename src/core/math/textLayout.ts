@@ -45,6 +45,12 @@ function wrapLine(text: string, maxWidth: number, size: number, node: VectorNode
   return lines;
 }
 
+/** Only area text owns a clipping frame. Point/path text may overhang its
+ * advance width (or retain a legacy fixed frame), especially with bold/italic fonts. */
+export function clipsTextToFrame(node: VectorNode): boolean {
+  return node.textStyle?.typeMode === 'area';
+}
+
 /** Glyph transforms are independent of the editable font size and survive reflow. */
 export function textGlyphTransform(node: VectorNode) {
   const point = node.textStyle?.typeMode === 'point';
@@ -88,4 +94,46 @@ export function fitPointTextFrame(node: VectorNode, measure: TextMeasurer = meas
   const x = style.align === 'center' ? node.x + (node.width - width) / 2 : (style.align === 'right') !== reversed ? node.x + node.width - width : node.x;
   const y = (node.textScaleY ?? 1) < 0 ? node.y + node.height - height : node.y;
   return { ...node, x, y, width, height, points: createRectangleAnchors(x, y, width, height) };
+}
+
+/** Bounds used for asset export: point glyph ink can exceed both its advance
+ * width and old saved frames. Keep the original frame and union the ink. */
+export function pointTextPaintBounds(node: VectorNode) {
+  const layout = layoutText(node);
+  const glyph = textGlyphTransform(node);
+  let ctx: CanvasRenderingContext2D | null = null;
+  try { if (typeof document !== 'undefined') ctx = document.createElement('canvas').getContext('2d'); } catch { /* use conservative fallback bounds */ }
+  if (ctx) {
+    const style = node.textStyle;
+    const italic = style?.fontStyle?.toLowerCase().includes('italic') ? 'italic ' : '';
+    const bold = style?.fontStyle?.toLowerCase().includes('bold') ? 'bold ' : '';
+    ctx.font = `${italic}${bold}${layout.fontSize}px ${style?.fontFamily || 'Inter, sans-serif'}`;
+    ctx.textAlign = 'left';
+  }
+  let minX = node.x, minY = node.y, maxX = node.x + node.width, maxY = node.y + node.height;
+  const stroke = Math.max(0, ...(node.strokes || []).filter(s => s.visible).map(s => s.weight)) / 2;
+  for (const [index, line] of layout.lines.entries()) {
+    if (!line) continue;
+    const metrics = ctx?.measureText(line);
+    const width = (metrics?.width ?? line.length * layout.fontSize * 0.56) + Math.max(0, line.length - 1) * layout.letterSpacing;
+    const x = layout.x - (layout.align === 'center' ? width / 2 : layout.align === 'right' ? width : 0);
+    const y = layout.y + index * layout.leading;
+    // Fallback deliberately allows generous overhang when ink metrics are unavailable.
+    const left = x - (metrics?.actualBoundingBoxLeft ?? layout.fontSize) - stroke + Math.min(0, layout.letterSpacing * line.length);
+    const right = x + (metrics?.actualBoundingBoxRight ?? (width + layout.fontSize)) + stroke + Math.max(0, layout.letterSpacing * line.length);
+    const top = y - (metrics?.actualBoundingBoxAscent ?? layout.fontSize * 1.5) - stroke;
+    const bottom = y + (metrics?.actualBoundingBoxDescent ?? layout.fontSize) + stroke;
+    const x1 = glyph.sx * left + glyph.tx, x2 = glyph.sx * right + glyph.tx;
+    const y1 = glyph.sy * top + glyph.ty, y2 = glyph.sy * bottom + glyph.ty;
+    minX = Math.min(minX, x1, x2); maxX = Math.max(maxX, x1, x2);
+    minY = Math.min(minY, y1, y2); maxY = Math.max(maxY, y1, y2);
+  }
+  if (node.rotation) {
+    const radians = node.rotation * Math.PI / 180, c = Math.cos(radians), s = Math.sin(radians);
+    const cx = node.x + node.width / 2, cy = node.y + node.height / 2;
+    const corners = [[minX, minY], [minX, maxY], [maxX, minY], [maxX, maxY]].map(([x, y]) => ({ x: cx + (x-cx)*c - (y-cy)*s, y: cy + (x-cx)*s + (y-cy)*c }));
+    minX = Math.min(...corners.map(p => p.x)); maxX = Math.max(...corners.map(p => p.x));
+    minY = Math.min(...corners.map(p => p.y)); maxY = Math.max(...corners.map(p => p.y));
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }

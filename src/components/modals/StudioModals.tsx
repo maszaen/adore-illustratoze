@@ -2304,9 +2304,10 @@ export const StudioModals: React.FC = () => {
             <button
               onClick={() => {
                 mutateDocument((draft) => {
-                  for (const n of Object.values(draft.nodes || {})) {
-                    if (n.type === 'blend' || selectedIds.includes(n.id)) {
+                  for (const n of selectedIds.map(id => draft.nodes[id]).filter(Boolean)) {
+                    if (n.type === 'blend') {
                       n.blendSpec = {
+                        ...n.blendSpec,
                         mode: blendModeSpacing,
                         steps: Math.max(1, Math.round(blendSteps)),
                       };

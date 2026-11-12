@@ -1,4 +1,5 @@
-import { layoutText, textGlyphTransform } from '../math/textLayout';
+import { blendIntermediateNodes } from '../math/blend';
+import { clipsTextToFrame, layoutText, textGlyphTransform } from '../math/textLayout';
 import { PDFDocument, StandardFonts, rgb, pushGraphicsState, popGraphicsState, rectangle, clip, endPath, concatTransformationMatrix } from 'pdf-lib';
 import type { ArtboardItem, StudioDocument, VectorNode } from '../types';
 import { hexToRgb } from '../math/color';
@@ -145,6 +146,14 @@ export async function exportDocumentToPdfBytes(
     const drawVectorNodeOnPage = (node: VectorNode) => {
       if (!node || !node.visible || node.isGuide) return;
 
+      if (node.type === 'blend' && node.children?.length === 2) {
+        const endpoints = node.children.map(id => nodesMap[id]);
+        if (endpoints.every(Boolean)) {
+          [endpoints[0], ...blendIntermediateNodes(node, nodesMap), endpoints[1]].forEach(drawVectorNodeOnPage);
+        }
+        return;
+      }
+
       if (node.children && node.children.length > 0) {
         for (const cid of node.children) {
           const child = nodesMap[cid];
@@ -171,7 +180,10 @@ export async function exportDocumentToPdfBytes(
         const layout = layoutText(node);
         const isBold = node.textStyle?.fontStyle?.toLowerCase().includes('bold');
         const font = isBold ? helveticaBold : helvetica;
-        page.pushOperators(pushGraphicsState(), rectangle(toPdfX(node.x), toPdfY(node.y + node.height), Math.max(0, node.width), Math.max(0, node.height)), clip(), endPath());
+        page.pushOperators(pushGraphicsState());
+        if (clipsTextToFrame(node)) {
+          page.pushOperators(rectangle(toPdfX(node.x), toPdfY(node.y + node.height), Math.max(0, node.width), Math.max(0, node.height)), clip(), endPath());
+        }
         const glyph = textGlyphTransform(node);
         const ax = toPdfX(node.x), ay = toPdfY(node.y);
         page.pushOperators(concatTransformationMatrix(glyph.sx, 0, 0, glyph.sy,

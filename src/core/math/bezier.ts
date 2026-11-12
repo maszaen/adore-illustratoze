@@ -487,6 +487,18 @@ export function computeBoundingBoxFromAnchors(
   if (!points || points.length === 0) {
     return { x: 0, y: 0, width: 0, height: 0 };
   }
+  // Separate moveTo contours must not create fictitious connecting curves.
+  if (points.slice(1).some(point => point.moveTo)) {
+    const contours: AnchorPoint[][] = [];
+    for (const point of points) {
+      if (!contours.length || point.moveTo) contours.push([]);
+      contours[contours.length - 1].push(point);
+    }
+    const boxes = contours.map(contour => computeBoundingBoxFromAnchors(contour, closed));
+    const minX = Math.min(...boxes.map(box => box.x)), minY = Math.min(...boxes.map(box => box.y));
+    const maxX = Math.max(...boxes.map(box => box.x + box.width)), maxY = Math.max(...boxes.map(box => box.y + box.height));
+    return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+  }
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;

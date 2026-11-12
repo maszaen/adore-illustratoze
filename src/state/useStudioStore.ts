@@ -1,3 +1,5 @@
+import { selectionNodeBounds } from '../core/math/selectionResize';
+import { canBlend } from '../core/math/blend';
 import { fitPointTextFrame } from '../core/math/textLayout';
 import { create } from 'zustand';
 import type {
@@ -713,6 +715,18 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
       if (next.textContent !== previous.textContent || keys.some(key => next.textStyle?.[key] !== previous.textStyle?.[key])) {
         nextDoc.nodes[id] = fitPointTextFrame(next);
       }
+    }
+
+    // Live blend bounds follow edits to either endpoint, including transaction previews.
+    for (const blend of Object.values(nextDoc.nodes)) {
+      if (blend.type !== 'blend' || !blend.children?.length) continue;
+      const children = blend.children.map(id => nextDoc.nodes[id]).filter(Boolean);
+      if (!children.length) continue;
+      const boxes = children.map(selectionNodeBounds);
+      const x = Math.min(...boxes.map(b => b.x)), y = Math.min(...boxes.map(b => b.y));
+      blend.x = x; blend.y = y;
+      blend.width = Math.max(...boxes.map(b => b.x + b.width)) - x;
+      blend.height = Math.max(...boxes.map(b => b.y + b.height)) - y;
     }
 
     if (options?.silent || s.isTransactionActive) {
@@ -1475,13 +1489,18 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     if (s.selectedNodeIds.length === 0) return;
     const toRemove = new Set(s.selectedNodeIds);
     s.updateDocument((d) => {
-      for (const id of toRemove) {
-        delete d.nodes[id];
+      const visit = (id: string) => {
+        for (const child of d.nodes[id]?.children || []) {
+          if (!toRemove.has(child)) { toRemove.add(child); visit(child); }
+        }
+      };
+      for (const id of s.selectedNodeIds) visit(id);
+      for (const id of toRemove) delete d.nodes[id];
+      for (const node of Object.values(d.nodes)) {
+        if (node.children) node.children = node.children.filter(id => !toRemove.has(id));
       }
-      for (const l of d.layers) {
-        l.nodeIds = l.nodeIds.filter((id) => !toRemove.has(id));
-      }
-    }, `Delete ${toRemove.size} Object(s)`);
+      for (const l of d.layers) l.nodeIds = l.nodeIds.filter((id) => !toRemove.has(id));
+    }, `Delete ${s.selectedNodeIds.length} Object(s)`);
     s.clearSelection();
   },
 
@@ -2644,46 +2663,50 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
 
   makeBlend: (mode = 'steps', steps = 6) => {
     const s = get();
-    if (s.selectedNodeIds.length < 2) return;
-    let blendId = '';
-    s.updateDocument((d) => {
-      const nodes = s.selectedNodeIds.map((id) => d.nodes[id]).filter(Boolean);
-      if (nodes.length < 2) return;
-      const first = nodes[0];
-      const last = nodes[nodes.length - 1];
-      blendId = makeAnchorId('blend');
-      const layer = d.layers.find((l) => l.id === first.layerId) || d.layers[0];
-      const minX = Math.min(first.x, last.x);
-      const minY = Math.min(first.y, last.y);
-      const maxX = Math.max(first.x + first.width, last.x + last.width);
-      const maxY = Math.max(first.y + first.height, last.y + last.height);
-
+    const doc = s.getActiveDocument();
+    const nodes = s.selectedNodeIds.map(id => doc.nodes[id]).filter(Boolean);
+    if (nodes.length !== 2 || !canBlend(nodes[0], nodes[1]) || !doc.layers.some(layer => layer.id === nodes[0].layerId && layer.visible && !layer.locked && nodes.every(n => layer.nodeIds.includes(n.id)))) {
+      if (typeof window !== 'undefined') window.alert('Blend requires two unlocked single-contour vectors on the same visible layer, both open or both closed, with simple solid styles.');
+      return;
+    }
+    const [first, last] = nodes;
+    const blendId = makeAnchorId('blend');
+    s.updateDocument(d => {
+      const layer = d.layers.find(l => l.id === first.layerId)!;
+      const index = Math.max(layer.nodeIds.indexOf(first.id), layer.nodeIds.indexOf(last.id));
+      layer.nodeIds.splice(index + 1, 0, blendId);
+      d.nodes[first.id].parentId = blendId;
+      d.nodes[last.id].parentId = blendId;
+      const x = Math.min(first.x, last.x), y = Math.min(first.y, last.y);
       d.nodes[blendId] = {
-        ...first,
-        id: blendId,
-        name: '<Blend>',
-        type: 'blend',
-        x: minX,
-        y: minY,
-        width: maxX - minX,
-        height: maxY - minY,
-        children: nodes.map((n) => n.id),
-        blendSpec: {
-          mode,
-          steps,
-          spinePoints: [
-            { id: 'sp-1', x: first.x + first.width / 2, y: first.y + first.height / 2, pointType: 'smooth' },
-            { id: 'sp-2', x: last.x + last.width / 2, y: last.y + last.height / 2, pointType: 'smooth' },
-          ],
-        },
+        id: blendId, name: '<Blend>', type: 'blend', layerId: layer.id, visible: true, locked: false,
+        x, y, width: Math.max(first.x + first.width, last.x + last.width) - x,
+        height: Math.max(first.y + first.height, last.y + last.height) - y,
+        rotation: 0, points: [], closed: false, children: [first.id, last.id], fills: [], strokes: [], effects: [], opacity: 1, blendMode: 'normal',
+        blendSpec: { mode, steps: Math.max(1, Math.min(250, Number.isFinite(steps) ? Math.round(steps) : 6)) },
       };
-      layer.nodeIds.push(blendId);
-    }, 'Make Blend (Alt+Ctrl+B)');
-    if (blendId) s.selectNodes([blendId], false);
+    }, 'Make Blend');
+    s.selectNodes([blendId], false);
   },
 
   releaseBlend: () => {
-    get().ungroupSelection();
+    const s = get();
+    const ids = s.selectedNodeIds.filter(id => s.getActiveDocument().nodes[id]?.type === 'blend');
+    if (!ids.length) return;
+    const released: string[] = [];
+    s.updateDocument(d => {
+      for (const id of ids) {
+        const blend = d.nodes[id];
+        if (!blend || blend.parentId) continue;
+        for (const childId of blend.children || []) {
+          const child = d.nodes[childId];
+          if (child && child.parentId === id) { child.parentId = undefined; released.push(childId); }
+        }
+        for (const layer of d.layers) layer.nodeIds = layer.nodeIds.filter(nid => nid !== id);
+        delete d.nodes[id];
+      }
+    }, 'Release Blend');
+    if (released.length) s.selectNodes(released, false);
   },
 
   makeEnvelopeWarp: (warpStyle = 'arc', bend = 45, hDistort = 0, vDistort = 0) => {
