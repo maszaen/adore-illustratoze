@@ -1217,7 +1217,7 @@ export const TopMenuBar: React.FC = () => {
               fontWeight: 600,
             }}
           >
-            <Lock size={13} aria-hidden="true" /><span>Isolation Mode: &lt;Group&gt;</span>
+            <Lock size={13} aria-hidden="true" /><span>Isolation Mode: {store.getActiveDocument?.()?.nodes?.[isolatedGroupId]?.name || '<Group>'}</span>
             <button
               type="button"
               onClick={() => {

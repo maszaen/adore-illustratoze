@@ -105,6 +105,18 @@ export const LeftToolbar: React.FC = () => {
     window.addEventListener('pointercancel', cancel);
   };
   const toolbarRef = useRef<HTMLDivElement>(null);
+  // When the tool grid needs a scrollbar the toolbar widens by the scrollbar instead of squeezing the tools.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [gridScrolls, setGridScrolls] = useState(false);
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid || typeof ResizeObserver === 'undefined') return;
+    const check = () => setGridScrolls(grid.scrollHeight > grid.clientHeight + 1);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [columns, toolOrder]);
 
   // Sync activeTool to its group's displayed icon
   useEffect(() => {
@@ -261,7 +273,7 @@ export const LeftToolbar: React.FC = () => {
       {toolbarDockTarget && <div className="ai-toolbar-dock-indicator" aria-hidden="true" />}
       <aside
         ref={toolbarRef}
-        className={`ai-left-toolbar ${columns === 2 ? 'cols-2' : 'cols-1'}`}
+        className={`ai-left-toolbar ${columns === 2 ? 'cols-2' : 'cols-1'}${gridScrolls ? ' has-scroll' : ''}`}
         style={toolbarPosition ? { position: 'fixed', left: toolbarPosition.x, top: toolbarPosition.y, maxHeight: 'calc(100vh - 30px)', zIndex: 950, boxShadow: 'var(--ai-shadow-floating)', userSelect: 'none' } : { position: 'relative', userSelect: 'none' }}
       >
         {/* Top Bar: 1-Col / 2-Col Collapse Toggle (<< / >>) */}
@@ -307,7 +319,7 @@ export const LeftToolbar: React.FC = () => {
         {customizing && <span className="ai-toolbar-hint" title="Drag tools or use arrow keys to reorder"><ArrowUpDown size={13} /></span>}
 
         {/* Tool Buttons Grid */}
-        <div className="ai-tool-grid">
+        <div className="ai-tool-grid" ref={gridRef}>
           {orderedGroups.map((grp) => {
             const currentToolId = groupActiveTool[grp.id] || grp.defaultToolId;
             const currentTool =

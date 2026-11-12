@@ -337,6 +337,11 @@ export const StudioModals: React.FC = () => {
   const [shapeSides, setShapeSides] = useState(6);
   const [shapeInnerRatio, setShapeInnerRatio] = useState(0.45);
 
+  // --- 12b. NEW ARTBOARD DIALOG STATE (Artboard tool click) ---
+  const [newAbName, setNewAbName] = useState('Artboard 2');
+  const [newAbW, setNewAbW] = useState(1200);
+  const [newAbH, setNewAbH] = useState(800);
+
   // --- 13. PREFERENCES & SHORTCUTS STATE ---
   const [shortcutSearch, setShortcutSearch] = useState('');
   const [shortcuts, setShortcuts] = useState(DEFAULT_SHORTCUT_BINDINGS);
@@ -359,6 +364,12 @@ export const StudioModals: React.FC = () => {
       } else if (tool === 'star' || tool === 'flare') {
         setShapeType('star');
       }
+    } else if (activeModal === 'artboard-dialog') {
+      // Default to the size of the artboard the user worked on last.
+      const active = (doc.artboards || []).find((a) => a.id === doc.activeArtboardId) || doc.artboards?.[0];
+      setNewAbW(Math.round(active?.width ?? 1200));
+      setNewAbH(Math.round(active?.height ?? 800));
+      setNewAbName(`Artboard ${(doc.artboards?.length ?? 0) + 1}`);
     } else if (activeModal === 'export-screens') {
       setSelectedArtboardIds((doc.artboards || []).map((a) => a.id));
     } else if (activeModal === 'recolor-artwork') {
@@ -3110,10 +3121,13 @@ export const StudioModals: React.FC = () => {
             <button
               onClick={() => {
                 let createdId = '';
+                const origin = store.creationPoint;
                 mutateDocument((draft) => {
-                  const ab = draft.artboards[0] || { x: 0, y: 0, width: 800, height: 600 };
-                  const x = ab.x + (ab.width - shapeW) / 2;
-                  const y = ab.y + (ab.height - shapeH) / 2;
+                  // Like Illustrator: the clicked point is the shape's top-left corner. Without a
+                  // click point, centre it on the active artboard.
+                  const ab = draft.artboards.find((a) => a.id === draft.activeArtboardId) || draft.artboards[0] || { x: 0, y: 0, width: 800, height: 600 };
+                  const x = origin ? origin.x : ab.x + (ab.width - shapeW) / 2;
+                  const y = origin ? origin.y : ab.y + (ab.height - shapeH) / 2;
                   const id = makeAnchorId('shape');
                   createdId = id;
                   const layer =
@@ -3187,6 +3201,8 @@ export const StudioModals: React.FC = () => {
                 if (createdId && typeof store.selectNodes === 'function') {
                   store.selectNodes([createdId], false);
                 }
+                // Like a drawn shape, a dialog-created one hands back to the Selection tool.
+                if (createdId) useStudioStore.getState().setActiveTool('select');
                 closeModal();
               }}
               style={primaryBtnStyle}
@@ -3194,6 +3210,81 @@ export const StudioModals: React.FC = () => {
               OK
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          16b. NEW ARTBOARD DIALOG (Artboard tool click)
+         ==================================================================== */}
+      {activeModal === 'artboard-dialog' && (
+        <div style={{ ...modalBoxStyle, width: 340 }}>
+          <div style={modalHeaderStyle}>
+            <span>New Artboard</span>
+            <button type="button" aria-label="Close dialog" onClick={closeModal} style={closeBtnStyle}>
+              <X size={15} />
+            </button>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const origin = store.creationPoint ?? { x: 0, y: 0 };
+              store.addArtboard({
+                name: newAbName.trim() || undefined,
+                x: Math.round(origin.x),
+                y: Math.round(origin.y),
+                width: Math.max(1, Math.round(newAbW)),
+                height: Math.max(1, Math.round(newAbH)),
+              });
+              closeModal();
+            }}
+          >
+            <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div>
+                <label style={labelStyle} htmlFor="new-artboard-name">Name</label>
+                <input id="new-artboard-name" className="ai-input" style={{ ...fullInputStyle, boxSizing: 'border-box' }} value={newAbName} onChange={(e) => setNewAbName(e.target.value)} autoFocus />
+              </div>
+              <div>
+                <label style={labelStyle} htmlFor="new-artboard-preset">Size preset</label>
+                <select
+                  id="new-artboard-preset"
+                  value=""
+                  style={fullInputStyle}
+                  onChange={(e) => {
+                    const sizes: Record<string, [number, number]> = { a4: [595, 842], letter: [612, 792], hd: [1920, 1080], square: [1080, 1080], story: [1080, 1920], mobile: [393, 852] };
+                    const size = sizes[e.target.value];
+                    if (size) { setNewAbW(size[0]); setNewAbH(size[1]); }
+                  }}
+                >
+                  <option value="">Choose a preset…</option>
+                  <option value="a4">A4 (595 × 842 pt)</option>
+                  <option value="letter">Letter (612 × 792 pt)</option>
+                  <option value="hd">Web HD (1920 × 1080)</option>
+                  <option value="square">Social Square (1080 × 1080)</option>
+                  <option value="story">Social Story (1080 × 1920)</option>
+                  <option value="mobile">iPhone Pro (393 × 852)</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Width</span>
+                <NumericScrubInput value={newAbW} onChange={setNewAbW} unit={doc.unit} min={1} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Height</span>
+                <NumericScrubInput value={newAbH} onChange={setNewAbH} unit={doc.unit} min={1} />
+              </div>
+              <button type="button" className="ai-btn" style={{ alignSelf: 'flex-start' }} onClick={() => { setNewAbW(newAbH); setNewAbH(newAbW); }}>
+                Swap orientation
+              </button>
+            </div>
+            <div style={modalFooterStyle}>
+              <button type="button" onClick={closeModal} style={secondaryBtnStyle}>
+                Cancel
+              </button>
+              <button type="submit" style={primaryBtnStyle}>
+                OK
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

@@ -1,6 +1,6 @@
 import { createGridAnchors } from '../../core/math/gridShapes';
 import { blendIntermediateNodes } from '../../core/math/blend';
-import { collectSnapTargets, movingSelectionBounds, snapMove, type SnapTargets } from '../../core/math/snapping';
+import { collectArtboardSnapTargets, collectSnapTargets, movingSelectionBounds, snapMove, snapPoint, type SnapTargets } from '../../core/math/snapping';
 import { rotateNodeAround } from '../../core/math/selectionRotate';
 import { cornerDragRadius, toggleCornerSelection } from '../../core/math/liveCorners';
 import { DEFAULT_TEXT_STYLE } from '../panels/TypographyPanel';
@@ -53,6 +53,14 @@ interface SmartGuideSnap {
   lineY?: { y: number; x1: number; x2: number };
 }
 
+/**
+ * Whether the object's interior is painted, and so clickable. A fill of None (no fill item, a hidden
+ * one, or type/color 'none') is not; a 0% opacity or transparent fill still is, as in Illustrator.
+ */
+function hasPaintedFillItem(node: VectorNode): boolean {
+  return (node.fills || []).some((f) => f.visible && f.type !== 'none' && (f.type !== 'solid' || (!!f.color && f.color !== 'none')));
+}
+
 export const StudioCanvas: React.FC = () => {
   const store = useStudioStore();
   const doc = store.getActiveDocument();
@@ -71,11 +79,16 @@ export const StudioCanvas: React.FC = () => {
   const selectedAnchorIds = store.selectedAnchorIds;
   const keyObjectId = store.keyObjectId;
   const isolationGroupId = store.isolationGroupId;
+  const isolatedNode = isolationGroupId ? doc.nodes[isolationGroupId] : undefined;
+  /** True while the isolated object is drawn above the dim overlay (the only interactive pass). */
+  const isolationPass = useRef(false);
   const patternEditId = store.patternEditId;
   const drawingMode = store.drawingMode;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  /** Pointer that started the current gesture; used to capture it so drags survive leaving the canvas. */
+  const gesturePointerId = useRef<number | null>(null);
 
   const [viewportSize, setViewportSize] = useState({ width: 1400, height: 900 });
   const [cursorCanvasPos, setCursorCanvasPos] = useState<Point2D>({ x: 0, y: 0 });
@@ -153,6 +166,13 @@ export const StudioCanvas: React.FC = () => {
         sides: number;
         innerRatio: number;
         cornerRadius: number;
+        snapTargets: SnapTargets;
+      }
+    | {
+        type: 'draw-artboard';
+        startCanvas: Point2D;
+        currentCanvas: Point2D;
+        snapTargets: SnapTargets;
       }
     | {
         type: 'freehand';
@@ -168,9 +188,11 @@ export const StudioCanvas: React.FC = () => {
     | {
         type: 'artboard-resize';
         artboardId: string;
-        handle: 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'n' | 'e' | 's' | 'w' | 'new';
+        handle: 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'n' | 'e' | 's' | 'w';
         startCanvas: Point2D;
         initialArtboard: ArtboardItem;
+        /** Other artboards only: artboards never snap to artwork. */
+        snapTargets: SnapTargets;
       }
     | {
         type: 'slice-draw';
@@ -261,6 +283,8 @@ export const StudioCanvas: React.FC = () => {
         setBrushRadius((r) => Math.min(200, r + 6));
       } else if (e.key === 'Escape') {
         if (dragAction?.type === 'draw-text') setDragAction(null);
+        if (dragAction?.type === 'draw-shape' || dragAction?.type === 'draw-artboard') { setSmartSnap(null); setDragAction(null); }
+        if (dragAction?.type === 'artboard-resize') cancelArtboardDrag(dragAction);
         if (dragAction?.type === 'live-corner') {
           store.updateDocument(draft => { for (const [id, node] of Object.entries(dragAction.initialNodes)) draft.nodes[id] = structuredClone(node); }, 'Cancel Corners', { silent: true });
           useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
@@ -287,10 +311,16 @@ export const StudioCanvas: React.FC = () => {
         }
         if (activeDrawingNodeId) {
           setActiveDrawingNodeId(null);
+          returnToSelectionTool();
         }
         if (editingTextNodeId) {
           setEditingTextNodeId(null);
         }
+      } else if (e.key === 'Enter' && activeDrawingNodeId) {
+        // Enter finishes an open pen path, keeps it selected and returns to the Selection tool.
+        e.preventDefault();
+        setActiveDrawingNodeId(null);
+        returnToSelectionTool();
       } else if (
         dragAction?.type === 'draw-shape' &&
         (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
@@ -354,9 +384,25 @@ export const StudioCanvas: React.FC = () => {
 
   // Point snapping is used for placement/anchor editing; selection movement
   // uses the moving object's bounds instead of the pointer location.
-  const applySnapping = useCallback((pt: Point2D, excludeIds: string[] = []): Point2D => {
+  /** Put a moved/resized artboard (and the artwork that moved with it) back where it started. */
+  function cancelArtboardDrag(action: { artboardId: string; initialArtboard: ArtboardItem }) {
+    const { x, y, width, height, orientation } = action.initialArtboard;
+    if (useStudioStore.getState().isTransactionActive) {
+      store.updateArtboard(action.artboardId, { x, y, width, height, orientation }, { silent: true });
+      useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Artboard change cancelled' });
+    }
+    setSmartSnap(null);
+    setDragAction(null);
+  }
+
+  const snapOptions = () => {
     const artboard = doc.artboards.find(ab => ab.id === doc.activeArtboardId) || doc.artboards[0];
-    const targets = showSmartGuides ? collectSnapTargets(doc, excludeIds, store.showGuides) : { x: [], y: [] };
+    return { zoom, smart: showSmartGuides, grid: snapToGrid, gridOrigin: { x: artboard?.x ?? 0, y: artboard?.y ?? 0 } };
+  };
+  const noSnapTargets = (): SnapTargets => ({ x: [], y: [] });
+  const applySnapping = useCallback((pt: Point2D, excludeIds: string[] = [], targetsOverride?: SnapTargets): Point2D => {
+    const artboard = doc.artboards.find(ab => ab.id === doc.activeArtboardId) || doc.artboards[0];
+    const targets = targetsOverride ?? (showSmartGuides ? collectSnapTargets(doc, excludeIds, store.showGuides) : { x: [], y: [] });
     const result = snapMove({ x:pt.x, y:pt.y, width:0, height:0 }, {x:0,y:0}, targets, {
       zoom, smart:showSmartGuides, grid:snapToGrid, gridOrigin: {x:artboard?.x ?? 0, y:artboard?.y ?? 0},
     });
@@ -564,20 +610,113 @@ export const StudioCanvas: React.FC = () => {
     ]
   );
 
+  /**
+   * What the Selection tool picks for a hit on `id`, like Illustrator: the top-level group that contains
+   * it, or, in isolation mode, the item directly inside the isolated group.
+   */
+  const resolveSelectionTarget = (id: string): string => {
+    let current = doc.nodes[id];
+    if (!current) return id;
+    const seen = new Set<string>();
+    // Stop at the isolated object itself (e.g. one shape isolated from inside a group) or at its child.
+    while (current.id !== isolationGroupId && current.parentId && current.parentId !== isolationGroupId && doc.nodes[current.parentId] && !seen.has(current.id)) {
+      seen.add(current.id);
+      current = doc.nodes[current.parentId];
+    }
+    return current.id;
+  };
+
+  /** True for the isolated object and everything inside it (always true outside isolation mode). */
+  const isWithinIsolation = (id: string): boolean => {
+    if (!isolatedNode) return true;
+    let current: VectorNode | undefined = doc.nodes[id];
+    const seen = new Set<string>();
+    while (current && !seen.has(current.id)) {
+      if (current.id === isolatedNode.id) return true;
+      seen.add(current.id);
+      current = current.parentId ? doc.nodes[current.parentId] : undefined;
+    }
+    return false;
+  };
+
+  /** Objects a Selection-tool marquee can pick: top-level ones, or the isolated group's direct children. */
+  const isMarqueeSelectable = (n: VectorNode): boolean => {
+    if (!isolatedNode) return !n.parentId;
+    return isolatedNode.children?.length ? n.parentId === isolatedNode.id : n.id === isolatedNode.id;
+  };
+
+  /** Creation tools hand back to the Selection tool once the object exists. */
+  const returnToSelectionTool = () => {
+    if (useStudioStore.getState().activeTool !== 'select') store.setActiveTool('select');
+  };
+
+  // Double-click with a selection tool: edit text, open graph data, or isolate the object (a group, or a
+  // single shape, which is isolated without being grouped). Double-click on empty space leaves isolation.
+  const handleCanvasDoubleClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (activeTool !== 'select' && activeTool !== 'direct-select' && activeTool !== 'group-select') return;
+    // The first click captured the pointer on the svg, so the dblclick target is the svg itself; find
+    // the object under the pointer instead (hit-testing honours pointer-events, so dimmed art is skipped).
+    const candidates = [
+      ...(typeof document.elementsFromPoint === 'function' ? document.elementsFromPoint(e.clientX, e.clientY) : []),
+      e.target as Element,
+    ];
+    const element = candidates
+      .map((el) => el?.closest?.('[data-vector-node-id]'))
+      .find((el): el is Element => !!el && !!svgRef.current?.contains(el));
+    const leaf = element ? doc.nodes[element.getAttribute('data-vector-node-id') || ''] : undefined;
+    if (!leaf || !isWithinIsolation(leaf.id)) {
+      if (isolatedNode) store.exitIsolationMode();
+      return;
+    }
+    const target = doc.nodes[resolveSelectionTarget(leaf.id)] || leaf;
+    if (target.locked) return;
+    const textNode = target.type === 'text' ? target : leaf.type === 'text' && activeTool !== 'select' ? leaf : undefined;
+    if (textNode) {
+      store.selectNodes([textNode.id], false);
+      setEditingTextNodeId(textNode.id);
+      setEditingTextValue(textNode.textContent || '');
+      return;
+    }
+    if (target.type === 'graph') {
+      store.selectNodes([target.id], false);
+      store.setActiveModal('graph-data');
+      return;
+    }
+    if (target.id !== isolationGroupId) store.enterIsolationMode(target.id);
+  };
+
   // Pointer Down on Canvas Background or Object
   const handleCanvasPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (e.button === 1 || isSpacePressed || activeTool === 'hand') {
-      setIsPanning(true);
-      panStartRef.current = {
-        screenX: e.clientX,
-        screenY: e.clientY,
-        panX,
-        panY,
-      };
+    // Panning (middle button, Space, Hand tool) is handled on the container in the capture phase,
+    // so it also works over handles and overlays. Other non-primary buttons never start tools.
+    if (e.button !== 0) return;
+
+    const rawPos = screenToCanvas(e.clientX, e.clientY);
+
+    // Artboard Tool (Shift+O): drag inside an artboard moves it (Alt duplicates); drag elsewhere, or
+    // Shift+drag anywhere, draws a new artboard; a click opens the size dialog. Snaps only to artboards.
+    if (activeTool === 'artboard') {
+      const hit = [...doc.artboards].reverse().find(ab => rawPos.x >= ab.x && rawPos.x <= ab.x + ab.width && rawPos.y >= ab.y && rawPos.y <= ab.y + ab.height);
+      if (hit && !e.shiftKey) {
+        if (hit.id !== doc.activeArtboardId) store.setActiveArtboardId(hit.id);
+        if (e.altKey) {
+          store.addArtboard({ ...hit, id: makeAnchorId('ab'), name: `${hit.name} Copy`, x: hit.x + 40, y: hit.y + 40 });
+          return;
+        }
+        svgRef.current?.setPointerCapture(e.pointerId);
+        setDragAction({
+          type: 'artboard-resize', artboardId: hit.id, handle: 'move', startCanvas: rawPos, initialArtboard: { ...hit },
+          snapTargets: showSmartGuides ? collectArtboardSnapTargets(doc, [hit.id]) : noSnapTargets(),
+        });
+        return;
+      }
+      const artboardTargets = showSmartGuides ? collectArtboardSnapTargets(doc) : noSnapTargets();
+      const start = applySnapping(rawPos, [], artboardTargets);
+      svgRef.current?.setPointerCapture(e.pointerId);
+      setDragAction({ type: 'draw-artboard', startCanvas: start, currentCanvas: start, snapTargets: artboardTargets });
       return;
     }
 
-    const rawPos = screenToCanvas(e.clientX, e.clientY);
     const pos = applySnapping(rawPos);
 
     // Zoom Tool (Z)
@@ -594,32 +733,6 @@ export const StudioCanvas: React.FC = () => {
           my - ((my - panY) / zoom) * nextZoom
         );
       }
-      return;
-    }
-
-    // Artboard Tool (Shift+O): draw new artboard on empty pasteboard drag
-    if (activeTool === 'artboard') {
-      const newAb: ArtboardItem = {
-        id: makeAnchorId('ab'),
-        name: `Artboard ${doc.artboards.length + 1}`,
-        x: pos.x,
-        y: pos.y,
-        width: 400,
-        height: 300,
-        orientation: 'landscape',
-        showCenterMark: false,
-        showCrossHairs: false,
-        showVideoSafeAreas: false,
-        backgroundColor: '#ffffff',
-      };
-      store.addArtboard(newAb);
-      setDragAction({
-        type: 'artboard-resize',
-        artboardId: newAb.id,
-        handle: 'se',
-        startCanvas: pos,
-        initialArtboard: { ...newAb, width: 10, height: 10 },
-      });
       return;
     }
 
@@ -707,6 +820,7 @@ export const StudioCanvas: React.FC = () => {
             : pts;
           updateNodeAnchorsAndBounds(activeDrawingNodeId, closedPts, true, 'Close Path');
           setActiveDrawingNodeId(null);
+          returnToSelectionTool();
           return;
         }
 
@@ -827,6 +941,7 @@ export const StudioCanvas: React.FC = () => {
       store.selectNodes([textNode.id], false);
       setEditingTextNodeId(textNode.id);
       setEditingTextValue(textNode.textContent || '');
+      returnToSelectionTool();
       return;
     }
 
@@ -854,6 +969,7 @@ export const StudioCanvas: React.FC = () => {
         sides: activeTool === 'star' ? 5 : 6,
         innerRatio: 0.45,
         cornerRadius: activeTool === 'rounded-rectangle' ? 16 : 0,
+        snapTargets: showSmartGuides ? collectSnapTargets(doc, [], store.showGuides) : noSnapTargets(),
       });
       return;
     }
@@ -903,6 +1019,7 @@ export const StudioCanvas: React.FC = () => {
       store.addNode(graphNode, 'Create Graph');
       store.selectNodes([graphNode.id], false);
       store.setActiveModal('graph-data');
+      returnToSelectionTool();
       return;
     }
 
@@ -1226,9 +1343,12 @@ export const StudioCanvas: React.FC = () => {
         break;
       }
 
-      case 'draw-shape': {
+      case 'draw-shape':
+      case 'draw-artboard': {
+        const snapped = snapPoint(rawPos, dragAction.snapTargets, snapOptions());
+        setSmartSnap(snapped.guide);
         setDragAction((prev) =>
-          prev && prev.type === 'draw-shape' ? { ...prev, currentCanvas: rawPos } : prev
+          prev && (prev.type === 'draw-shape' || prev.type === 'draw-artboard') ? { ...prev, currentCanvas: snapped.point } : prev
         );
         break;
       }
@@ -1280,38 +1400,35 @@ export const StudioCanvas: React.FC = () => {
         if (!useStudioStore.getState().isTransactionActive) {
           store.beginTransaction('Modify Artboard');
         }
-        const dx = rawPos.x - startCanvas.x;
-        const dy = rawPos.y - startCanvas.y;
         if (handle === 'move') {
-          const nextX = Math.round(initialArtboard.x + dx);
-          const nextY = Math.round(initialArtboard.y + dy);
-          store.updateArtboard(artboardId, { x: nextX, y: nextY }, { silent: true });
+          let dx = rawPos.x - startCanvas.x;
+          let dy = rawPos.y - startCanvas.y;
+          const axis = e.shiftKey ? (Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y') : 'both';
+          if (axis === 'x') dy = 0;
+          if (axis === 'y') dx = 0;
+          const result = snapMove(initialArtboard, { x: dx, y: dy }, dragAction.snapTargets, { ...snapOptions(), axis });
+          setSmartSnap(result.guide);
+          store.updateArtboard(artboardId, { x: Math.round(initialArtboard.x + result.delta.x), y: Math.round(initialArtboard.y + result.delta.y) }, { silent: true });
         } else {
-          let x = initialArtboard.x;
-          let y = initialArtboard.y;
-          let w = initialArtboard.width;
-          let h = initialArtboard.height;
-          if (handle.includes('e')) w = Math.max(50, initialArtboard.width + dx);
-          if (handle.includes('s')) h = Math.max(50, initialArtboard.height + dy);
-          if (handle.includes('w')) {
-            w = Math.max(50, initialArtboard.width - dx);
-            x = initialArtboard.x + (initialArtboard.width - w);
-          }
-          if (handle.includes('n')) {
-            h = Math.max(50, initialArtboard.height - dy);
-            y = initialArtboard.y + (initialArtboard.height - h);
-          }
-          store.updateArtboard(
-            artboardId,
-            {
-              x: Math.round(x),
-              y: Math.round(y),
-              width: Math.round(w),
-              height: Math.round(h),
-              orientation: w >= h ? 'landscape' : 'portrait',
-            },
-            { silent: true }
-          );
+          // The dragged corner/edge snaps to other artboards; dragging past the opposite edge flips it.
+          const movesX = handle.includes('e') || handle.includes('w');
+          const movesY = handle.includes('n') || handle.includes('s');
+          const snapped = snapPoint(rawPos, dragAction.snapTargets, snapOptions());
+          const guide = snapped.guide ? { ...snapped.guide } : null;
+          if (guide && !movesX) { delete guide.lineX; delete guide.x; }
+          if (guide && !movesY) { delete guide.lineY; delete guide.y; }
+          setSmartSnap(guide && (guide.lineX || guide.lineY) ? guide : null);
+          const dx = (movesX ? snapped.point.x : rawPos.x) - startCanvas.x;
+          const dy = (movesY ? snapped.point.y : rawPos.y) - startCanvas.y;
+          let x1 = initialArtboard.x, y1 = initialArtboard.y;
+          let x2 = initialArtboard.x + initialArtboard.width, y2 = initialArtboard.y + initialArtboard.height;
+          if (handle.includes('w')) x1 += dx;
+          if (handle.includes('e')) x2 += dx;
+          if (handle.includes('n')) y1 += dy;
+          if (handle.includes('s')) y2 += dy;
+          const x = Math.round(Math.min(x1, x2)), y = Math.round(Math.min(y1, y2));
+          const w = Math.max(1, Math.round(Math.abs(x2 - x1))), h = Math.max(1, Math.round(Math.abs(y2 - y1)));
+          store.updateArtboard(artboardId, { x, y, width: w, height: h, orientation: w >= h ? 'landscape' : 'portrait' }, { silent: true });
         }
         break;
       }
@@ -1454,7 +1571,7 @@ export const StudioCanvas: React.FC = () => {
           const hitAnchorIds: string[] = [];
           const hitNodeIds: string[] = [];
           for (const node of Object.values(doc.nodes)) {
-            if (!node.visible || node.locked) continue;
+            if (!node.visible || node.locked || !isWithinIsolation(node.id)) continue;
             let matchedNode = false;
             for (const pt of node.points || []) {
               if (pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY) {
@@ -1472,7 +1589,7 @@ export const StudioCanvas: React.FC = () => {
               (n) =>
                 n.visible &&
                 !n.locked &&
-                !n.parentId &&
+                isMarqueeSelectable(n) &&
                 n.x + n.width >= minX &&
                 n.x <= maxX &&
                 n.y + n.height >= minY &&
@@ -1497,7 +1614,7 @@ export const StudioCanvas: React.FC = () => {
         const hitAnchorIds: string[] = [];
         const hitNodeIds: string[] = [];
         for (const node of Object.values(doc.nodes)) {
-          if (!node.visible || node.locked) continue;
+          if (!node.visible || node.locked || !isWithinIsolation(node.id)) continue;
           for (const pt of node.points || []) {
             if (
               pt.x >= bbox.x &&
@@ -1539,10 +1656,33 @@ export const StudioCanvas: React.FC = () => {
       setEditingTextNodeId(node.id);
       setEditingTextValue(node.textContent || '');
       setDragAction(null);
+      returnToSelectionTool();
       return;
     }
 
     // Finalize Draw Shape
+    if (dragAction.type === 'draw-artboard') {
+      const { startCanvas, currentCanvas } = dragAction;
+      setDragAction(null);
+      const dx = currentCanvas.x - startCanvas.x;
+      const dy = currentCanvas.y - startCanvas.y;
+      // A click (under 4 screen pixels of movement) opens the size dialog, like the Rectangle tool.
+      if (Math.hypot(dx, dy) * zoom < 4) {
+        store.openCreationDialog('artboard-dialog', startCanvas);
+        return;
+      }
+      let w = Math.abs(dx);
+      let h = Math.abs(dy);
+      if (e.shiftKey) { const m = Math.max(w, h); w = m; h = m; }
+      const x = e.altKey ? startCanvas.x - w : dx >= 0 ? startCanvas.x : startCanvas.x - w;
+      const y = e.altKey ? startCanvas.y - h : dy >= 0 ? startCanvas.y : startCanvas.y - h;
+      store.addArtboard({
+        x: Math.round(x), y: Math.round(y),
+        width: Math.max(1, Math.round(e.altKey ? w * 2 : w)), height: Math.max(1, Math.round(e.altKey ? h * 2 : h)),
+      });
+      return;
+    }
+
     if (dragAction.type === 'draw-shape') {
       const { shapeTool, startCanvas, currentCanvas, sides, innerRatio, cornerRadius } =
         dragAction;
@@ -1551,9 +1691,9 @@ export const StudioCanvas: React.FC = () => {
       const dx = currentCanvas.x - startCanvas.x;
       const dy = currentCanvas.y - startCanvas.y;
 
-      // Single click without drag opens numeric Shape Dialog
-      if (Math.hypot(dx, dy) < 4) {
-        store.setActiveModal('shape-dialog');
+      // Single click (under 4 screen pixels of movement) opens the numeric Shape Dialog at that point
+      if (Math.hypot(dx, dy) * zoom < 4) {
+        store.openCreationDialog('shape-dialog', startCanvas);
         return;
       }
 
@@ -1657,6 +1797,7 @@ export const StudioCanvas: React.FC = () => {
 
       store.addNode(newNode, `Draw ${label}`);
       store.selectNodes([newNode.id], false);
+      returnToSelectionTool();
       return;
     }
 
@@ -1850,6 +1991,7 @@ export const StudioCanvas: React.FC = () => {
           'Apply Eyedropper Appearance'
         );
       }
+      returnToSelectionTool();
       return;
     }
 
@@ -1936,8 +2078,13 @@ export const StudioCanvas: React.FC = () => {
       return;
     }
 
+    // The Selection tool picks the whole top-level group (in isolation: the isolated group's child);
+    // Direct and Group Selection pick the object that was hit.
+    const pickId = activeTool === 'select' ? resolveSelectionTarget(node.id) : node.id;
+    if (doc.nodes[pickId]?.locked) return;
+
     // Key Object Selection: clicking an already-selected object in a multi-selection without Shift
-    const alreadySelected = selectedIds.includes(node.id);
+    const alreadySelected = selectedIds.includes(pickId);
     if (
       activeTool === 'select' &&
       alreadySelected &&
@@ -1945,16 +2092,16 @@ export const StudioCanvas: React.FC = () => {
       !e.shiftKey &&
       !e.altKey
     ) {
-      store.setKeyObjectId(keyObjectId === node.id ? null : node.id);
+      store.setKeyObjectId(keyObjectId === pickId ? null : pickId);
     }
 
     const nextSelection = e.shiftKey
       ? alreadySelected
-        ? selectedIds.filter((id) => id !== node.id)
-        : [...selectedIds, node.id]
+        ? selectedIds.filter((id) => id !== pickId)
+        : [...selectedIds, pickId]
       : alreadySelected
       ? selectedIds
-      : [node.id];
+      : [pickId];
 
     store.selectNodes(nextSelection, false);
 
@@ -2169,12 +2316,10 @@ export const StudioCanvas: React.FC = () => {
   // Render a single VectorNode with full Appearance Stack & Live Effects
   const renderVectorNode = (node: VectorNode, layerOutlineMode = false): React.ReactNode => {
     if (!node || !node.visible) return null;
+    // In isolation mode the isolated object is drawn once, on top of the dim overlay.
+    if (isolatedNode && node.id === isolatedNode.id && !isolationPass.current) return null;
 
     const isOutline = viewMode === 'outline' || layerOutlineMode;
-    const isDimmedByIsolation =
-      Boolean(isolationGroupId) &&
-      node.id !== isolationGroupId &&
-      node.parentId !== isolationGroupId;
 
     // Guide path
     if (node.isGuide) {
@@ -2198,23 +2343,23 @@ export const StudioCanvas: React.FC = () => {
       const children = (clip ? clip.content : (node.children || []).map((cid) => doc.nodes[cid]))
         .filter(Boolean);
       const groupFilter = resolveEffects(node) ? `url(#fx-${node.id})` : undefined;
+      // Blend end objects are pickable with the direct/group tools or while the blend is isolated,
+      // but never in the dimmed, non-interactive part of an isolation view.
+      const blendEndsPickable = (!isolatedNode || isolationPass.current)
+        && (activeTool === 'direct-select' || activeTool === 'group-select' || isolationGroupId === node.id);
       return (
         <g
           key={node.id}
-          opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          opacity={node.opacity}
           filter={groupFilter}
           style={node.blendMode && node.blendMode !== 'normal' ? { mixBlendMode: node.blendMode as any } : undefined}
           data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            store.enterIsolationMode(node.id);
-          }}
         >
           {node.type === 'blend' && children.length === 2 ? <>
-            <g pointerEvents={activeTool === 'direct-select' || activeTool === 'group-select' || isolationGroupId === node.id ? 'auto' : 'none'}>{renderVectorNode(children[0], layerOutlineMode)}</g>
+            <g pointerEvents={blendEndsPickable ? 'auto' : 'none'}>{renderVectorNode(children[0], layerOutlineMode)}</g>
             <g pointerEvents="none">{blendIntermediateNodes(node, doc.nodes).map(ch => renderVectorNode(ch, layerOutlineMode))}</g>
-            <g pointerEvents={activeTool === 'direct-select' || activeTool === 'group-select' || isolationGroupId === node.id ? 'auto' : 'none'}>{renderVectorNode(children[1], layerOutlineMode)}</g>
+            <g pointerEvents={blendEndsPickable ? 'auto' : 'none'}>{renderVectorNode(children[1], layerOutlineMode)}</g>
           </> : clip ? (
             <g clipPath={`url(#clip-${node.id})`}>{children.map((ch) => renderVectorNode(ch, layerOutlineMode))}</g>
           ) : children.map((ch) => renderVectorNode(ch, layerOutlineMode))}
@@ -2282,7 +2427,7 @@ export const StudioCanvas: React.FC = () => {
         <g
           key={node.id}
           transform={transformAttr}
-          opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          opacity={node.opacity}
           filter={filterUrl}
           data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
@@ -2308,7 +2453,7 @@ export const StudioCanvas: React.FC = () => {
           transform={`translate(${node.x}, ${node.y}) scale(${node.width / 64}, ${
             node.height / 64
           }) ${node.rotation ? `rotate(${node.rotation} 32 32)` : ''}`}
-          opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          opacity={node.opacity}
           filter={filterUrl}
           data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
@@ -2336,15 +2481,10 @@ export const StudioCanvas: React.FC = () => {
         <g
           key={node.id}
           transform={transformAttr}
-          opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          opacity={node.opacity}
           filter={filterUrl}
           data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            store.selectNodes([node.id], false);
-            store.setActiveModal('graph-data');
-          }}
         >
           <rect
             x={node.x}
@@ -2450,7 +2590,7 @@ export const StudioCanvas: React.FC = () => {
         <g
           key={node.id}
           transform={transformAttr}
-          opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          opacity={node.opacity}
           data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
         >
@@ -2484,15 +2624,10 @@ export const StudioCanvas: React.FC = () => {
         <g
           key={node.id}
           transform={transformAttr}
-          opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          opacity={node.opacity}
           filter={filterUrl}
           data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            setEditingTextNodeId(node.id);
-            setEditingTextValue(node.textContent || '');
-          }}
         >
           {/* Invisible bounding hit rect so clicking anywhere on the text frame selects/drags easily */}
           <rect
@@ -2557,6 +2692,8 @@ export const StudioCanvas: React.FC = () => {
 
     const visibleFills = (node.fills || []).filter((f) => f.visible && f.type !== 'none');
     const visibleStrokes = (node.strokes || []).filter((s) => s.visible && s.weight > 0);
+    const hasPaintedFill = hasPaintedFillItem(node);
+    const strokeHitWeight = Math.max(0, ...visibleStrokes.map((s) => s.weight));
 
     const renderSingleInstance = (keyPrefix: string, extraTransform?: string) => (
       <g key={keyPrefix} transform={extraTransform}>
@@ -2653,9 +2790,19 @@ export const StudioCanvas: React.FC = () => {
           );
         })}
 
-        {/* Transparent Hit Target when object has no visible fill */}
-        {visibleFills.length === 0 && (
-          <path d={d} fill="transparent" stroke="transparent" strokeWidth={Math.max(8, 10 / zoom)} />
+        {/* No fill (None, not a 0% or transparent fill): only the line itself is hit, like Illustrator.
+            A transparent band along the stroke keeps thin lines easy to grab at any zoom. */}
+        {!hasPaintedFill && (
+          <path
+            data-stroke-hit={node.id}
+            d={d}
+            fill="none"
+            stroke="transparent"
+            strokeWidth={Math.max(strokeHitWeight, 8 / zoom)}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            pointerEvents="stroke"
+          />
         )}
 
         {/* Shape Builder Interactive Region Highlight */}
@@ -2691,7 +2838,7 @@ export const StudioCanvas: React.FC = () => {
       <g
         key={node.id}
         transform={transformAttr}
-        opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+        opacity={node.opacity}
         filter={filterUrl}
         style={{ mixBlendMode: (node.blendMode as any) || 'normal' }}
         data-vector-node-id={node.id}
@@ -2714,6 +2861,106 @@ export const StudioCanvas: React.FC = () => {
       </g>
     );
   };
+
+  // Pointer cancelled (or the window lost focus mid-drag): undo previews, end marquee/lasso/pan.
+  const handleCanvasPointerCancel = () => {
+    setSmartSnap(null);
+    if (isPanning) { setIsPanning(false); panStartRef.current = null; }
+    if (marqueeRect) { setMarqueeRect(null); return; }
+    if (lassoPoints.length > 0) { setLassoPoints([]); return; }
+    if (!dragAction) return;
+    if (dragAction?.type === 'draw-text' || dragAction?.type === 'draw-shape' || dragAction?.type === 'draw-artboard' || dragAction?.type === 'freehand' && dragAction.tool === 'symbol-sprayer') { setSmartSnap(null); setDragAction(null); return; }
+    if (dragAction?.type === 'artboard-resize') { cancelArtboardDrag(dragAction); return; }
+    if (dragAction?.type === 'live-corner') {
+      store.updateDocument(draft => { for (const [id, node] of Object.entries(dragAction.initialNodes)) draft.nodes[id] = structuredClone(node); }, 'Cancel Corners', { silent: true });
+      useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
+      setDragAction(null); return;
+    }
+    if (dragAction?.type === 'rotate-bbox' || (dragAction?.type === 'transform-tool-drag' && dragAction.mode === 'rotate')) {
+      store.updateDocument(draft => { for (const [id, original] of Object.entries(dragAction.initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original); }, 'Cancel Rotation', { silent: true });
+      useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Rotation cancelled' });
+      setDragAction(null); return;
+    }
+    if (dragAction?.type === 'move-nodes') {
+      store.updateDocument(draft => { for (const [id, original] of Object.entries(dragAction.initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original); }, 'Cancel Move', { silent: true });
+      useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Move cancelled' });
+      setSmartSnap(null); setDragAction(null); return;
+    }
+    if (dragAction.type !== 'resize-bbox') {
+      // Anchor, handle, pen, width and other drags keep what was done so far as one undo step.
+      if (useStudioStore.getState().isTransactionActive) store.commitTransaction();
+      setDragAction(null);
+      return;
+    }
+    store.updateDocument(draft => {
+      for (const [id, original] of Object.entries(dragAction.initialNodes)) {
+        if (draft.nodes[id]) draft.nodes[id] = structuredClone(original);
+      }
+    }, 'Cancel Resize', { silent: true });
+    useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Resize cancelled' });
+    setDragAction(null);
+  };
+
+  // Drags must survive the pointer leaving the canvas (over panels, toolbars or outside the window).
+  // 1) Once a gesture becomes a drag, the svg captures the pointer, so moves and the release keep
+  //    arriving even off-canvas. Shape Builder is excluded: it relies on pointerenter over shapes.
+  // 2) Window listeners are a fallback for anything that still lands outside the svg (no capture,
+  //    capture refused) and end a drag whose button was released while the pointer was elsewhere.
+  const latestPointerHandlers = useRef({ move: handleCanvasPointerMove, up: handleCanvasPointerUp, cancel: handleCanvasPointerCancel });
+  latestPointerHandlers.current = { move: handleCanvasPointerMove, up: handleCanvasPointerUp, cancel: handleCanvasPointerCancel };
+  const gestureActive = Boolean(dragAction || marqueeRect || lassoPoints.length > 0);
+  const gestureCapturable = gestureActive && dragAction?.type !== 'shape-builder-drag';
+  useEffect(() => {
+    if (!gestureCapturable) return;
+    const svg = svgRef.current;
+    const pointerId = gesturePointerId.current;
+    if (!svg || pointerId === null || typeof svg.setPointerCapture !== 'function') return;
+    try { if (!svg.hasPointerCapture?.(pointerId)) svg.setPointerCapture(pointerId); } catch { /* pointer already released */ }
+  }, [gestureCapturable]);
+  useEffect(() => {
+    if (!gestureActive && !isPanning) return;
+    const inside = (el: Element | null, target: EventTarget | null) => !!el && target instanceof Node && el.contains(target);
+    const asReact = (e: PointerEvent) => e as unknown as React.PointerEvent<SVGSVGElement>;
+    const onMove = (e: PointerEvent) => {
+      if (isPanning) {
+        if (inside(containerRef.current, e.target) || !panStartRef.current) return;
+        store.setPan(panStartRef.current.panX + e.clientX - panStartRef.current.screenX, panStartRef.current.panY + e.clientY - panStartRef.current.screenY);
+        return;
+      }
+      if (inside(svgRef.current, e.target)) return; // the svg's own handlers have it
+      if (e.pointerType === 'mouse' && e.buttons === 0) { latestPointerHandlers.current.up(asReact(e)); return; }
+      latestPointerHandlers.current.move(asReact(e));
+    };
+    const onUp = (e: PointerEvent) => {
+      if (isPanning) {
+        if (inside(containerRef.current, e.target)) return;
+        setIsPanning(false); panStartRef.current = null;
+        return;
+      }
+      if (inside(svgRef.current, e.target)) return;
+      latestPointerHandlers.current.up(asReact(e));
+    };
+    const onCancel = (e: PointerEvent) => { if (!inside(svgRef.current, e.target)) latestPointerHandlers.current.cancel(); };
+    const onBlur = () => latestPointerHandlers.current.cancel();
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('blur', onBlur);
+    // No accidental text selection in panels while a drag passes over them.
+    document.documentElement.classList.add('ai-canvas-dragging');
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('blur', onBlur);
+      document.documentElement.classList.remove('ai-canvas-dragging');
+    };
+  }, [gestureActive, isPanning]);
+
+  // Leave isolation if the isolated object disappears (deleted, undone, document switched).
+  useEffect(() => {
+    if (isolationGroupId && !doc.nodes[isolationGroupId]) store.exitIsolationMode();
+  }, [isolationGroupId, doc.nodes]);
 
   // Determine cursor style for active tool & active drag handle
   const canvasCursor = useMemo(() => {
@@ -2739,6 +2986,27 @@ export const StudioCanvas: React.FC = () => {
       ref={containerRef}
       className="ai-canvas-container"
       onWheel={handleWheel}
+      // Panning wins over every handle and overlay: it is claimed here, in the capture phase,
+      // before live-corner widgets, bounding-box handles, rulers or the gradient annotator see it.
+      onPointerDownCapture={(e) => {
+        const wantsPan = e.button === 1 || (e.button === 0 && (isSpacePressed || activeTool === 'hand'));
+        if (!wantsPan) return;
+        if (e.button === 0 && (e.target as Element).closest?.('input, textarea, select, button, [contenteditable="true"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsPanning(true);
+        panStartRef.current = { screenX: e.clientX, screenY: e.clientY, panX, panY };
+        try { containerRef.current?.setPointerCapture(e.pointerId); } catch { /* pointer already released */ }
+      }}
+      onPointerMove={(e) => {
+        if (!isPanning || !panStartRef.current) return;
+        store.setPan(panStartRef.current.panX + e.clientX - panStartRef.current.screenX, panStartRef.current.panY + e.clientY - panStartRef.current.screenY);
+      }}
+      onPointerUp={() => { if (isPanning) { setIsPanning(false); panStartRef.current = null; } }}
+      onLostPointerCapture={() => { if (isPanning) { setIsPanning(false); panStartRef.current = null; } }}
+      // Stop the browser's middle-click autoscroll and Linux middle-click paste.
+      onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+      onAuxClick={(e) => { if (e.button === 1) e.preventDefault(); }}
       style={{
         flex: 1,
         position: 'relative',
@@ -2758,15 +3026,15 @@ export const StudioCanvas: React.FC = () => {
             left: store.showRulers ? 20 : 0,
             right: 0,
             height: 26,
-            backgroundColor: '#383838',
-            borderBottom: '1px solid #1a1a1a',
+            backgroundColor: 'var(--ai-bg-elevated)',
+            borderBottom: '1px solid var(--ai-border-strong)',
             display: 'flex',
             alignItems: 'center',
             gap: 8,
             padding: '0 12px',
             zIndex: 80,
             fontSize: 11,
-            color: '#e8e8e8',
+            color: 'var(--ai-text-primary)',
           }}
         >
           <button
@@ -2777,9 +3045,11 @@ export const StudioCanvas: React.FC = () => {
           >
             ← Exit Isolation Mode
           </button>
-          <span style={{ color: '#9e9e9e' }}>Layer 1</span>
-          <span>▸</span>
-          <strong style={{ color: '#ff9a00' }}>
+          <span style={{ color: 'var(--ai-text-secondary)' }}>
+            {doc.layers.find((l) => l.id === doc.nodes[isolationGroupId]?.layerId)?.name || 'Layer'}
+          </span>
+          <span style={{ color: 'var(--ai-text-secondary)' }}>▸</span>
+          <strong>
             {doc.nodes[isolationGroupId]?.name || '<Group>'}
           </strong>
         </div>
@@ -2794,15 +3064,15 @@ export const StudioCanvas: React.FC = () => {
             left: store.showRulers ? 20 : 0,
             right: 0,
             height: 28,
-            backgroundColor: '#1e293b',
-            borderBottom: '1px solid #38bdf8',
+            backgroundColor: 'var(--ai-bg-elevated)',
+            borderBottom: '1px solid var(--ai-accent-blue)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '0 12px',
             zIndex: 80,
             fontSize: 11,
-            color: '#f8fafc',
+            color: 'var(--ai-text-primary)',
           }}
         >
           <span>
@@ -2834,43 +3104,27 @@ export const StudioCanvas: React.FC = () => {
         ref={svgRef}
         width="100%"
         height="100%"
+        onPointerDownCapture={(e) => {
+          // Remembered so the gesture can be captured once it turns into a drag (see the effect above).
+          if (e.button === 0) gesturePointerId.current = e.pointerId;
+          // Clicking the canvas commits inline text editing.
+          if (e.button === 0 && editingTextNodeId) setEditingTextNodeId(null);
+        }}
         onPointerDown={handleCanvasPointerDown}
         onPointerMove={handleCanvasPointerMove}
+        onDoubleClick={handleCanvasDoubleClick}
         onPointerOver={(e) => {
           const element = (e.target as Element).closest?.('[data-vector-node-id]');
-          const id = element?.getAttribute('data-vector-node-id');
+          const hitId = element?.getAttribute('data-vector-node-id');
+          // Hover previews what a click would select: the whole group with the Selection tool.
+          const id = hitId && activeTool === 'select' ? resolveSelectionTarget(hitId) : hitId;
           const node = id ? doc.nodes[id] : undefined;
           const layer = node && doc.layers.find(l => l.id === node.layerId);
           setHoveredNodeId(node && !node.locked && layer?.visible && !layer.locked ? node.id : null);
         }}
         onPointerLeave={() => setHoveredNodeId(null)}
         onPointerUp={handleCanvasPointerUp}
-        onPointerCancel={() => {
-          if (dragAction?.type === 'draw-text' || dragAction?.type === 'freehand' && dragAction.tool === 'symbol-sprayer') { setDragAction(null); return; }
-          if (dragAction?.type === 'live-corner') {
-            store.updateDocument(draft => { for (const [id, node] of Object.entries(dragAction.initialNodes)) draft.nodes[id] = structuredClone(node); }, 'Cancel Corners', { silent: true });
-            useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
-            setDragAction(null); return;
-          }
-          if (dragAction?.type === 'rotate-bbox' || (dragAction?.type === 'transform-tool-drag' && dragAction.mode === 'rotate')) {
-            store.updateDocument(draft => { for (const [id, original] of Object.entries(dragAction.initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original); }, 'Cancel Rotation', { silent: true });
-            useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Rotation cancelled' });
-            setDragAction(null); return;
-          }
-          if (dragAction?.type === 'move-nodes') {
-            store.updateDocument(draft => { for (const [id, original] of Object.entries(dragAction.initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original); }, 'Cancel Move', { silent: true });
-            useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Move cancelled' });
-            setSmartSnap(null); setDragAction(null); return;
-          }
-          if (dragAction?.type !== 'resize-bbox') return;
-          store.updateDocument(draft => {
-            for (const [id, original] of Object.entries(dragAction.initialNodes)) {
-              if (draft.nodes[id]) draft.nodes[id] = structuredClone(original);
-            }
-          }, 'Cancel Resize', { silent: true });
-          useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Resize cancelled' });
-          setDragAction(null);
-        }}
+        onPointerCancel={handleCanvasPointerCancel}
         style={{ display: 'block', width: '100%', height: '100%' }}
       >
         {renderSvgDefs()}
@@ -2888,30 +3142,9 @@ export const StudioCanvas: React.FC = () => {
               <g
                 key={ab.id}
                 onPointerDown={(e) => {
-                  if (activeTool === 'artboard') {
-                    e.stopPropagation();
-                    store.setActiveArtboardId(ab.id);
-                    const startPos = screenToCanvas(e.clientX, e.clientY);
-                    if (e.altKey) {
-                      store.addArtboard({
-                        ...ab,
-                        id: makeAnchorId('ab'),
-                        name: `${ab.name} Copy`,
-                        x: ab.x + 40,
-                        y: ab.y + 40,
-                      });
-                      return;
-                    }
-                    setDragAction({
-                      type: 'artboard-resize',
-                      artboardId: ab.id,
-                      handle: 'move',
-                      startCanvas: startPos,
-                      initialArtboard: { ...ab },
-                    });
-                  } else {
-                    store.setActiveArtboardId(ab.id);
-                  }
+                  // The Artboard tool is handled by the canvas handler (move / draw / click dialog).
+                  if (activeTool === 'artboard' || e.button !== 0) return;
+                  if (ab.id !== doc.activeArtboardId) store.setActiveArtboardId(ab.id);
                 }}
               >
                 {/* Drop shadow behind artboard */}
@@ -3020,27 +3253,34 @@ export const StudioCanvas: React.FC = () => {
                 )}
 
                 {/* Artboard Badge & 8 Resize Handles when Artboard Tool (`Shift+O`) is active */}
-                {(activeTool === 'artboard' || doc.artboards.length > 1) && (
-                  <g>
-                    <rect
-                      x={ab.x}
-                      y={ab.y - 20 / zoom}
-                      width={135 / zoom}
-                      height={18 / zoom}
-                      fill={isActiveAb ? '#1473e6' : '#323232'}
-                      rx={2 / zoom}
-                    />
-                    <text
-                      x={ab.x + 6 / zoom}
-                      y={ab.y - 7 / zoom}
-                      fill="#ffffff"
-                      fontSize={10 / zoom}
-                      fontWeight={600}
-                    >
-                      {String(idx + 1).padStart(2, '0')} - {ab.name}
-                    </text>
-                  </g>
-                )}
+                {(activeTool === 'artboard' || doc.artboards.length > 1) && (() => {
+                  const label = `${String(idx + 1).padStart(2, '0')} - ${ab.name}`;
+                  // Size the badge to its label (about 6 px per character at 10 px) instead of a fixed width.
+                  const badgeW = Math.min(Math.max(48, label.length * 6.1 + 12), Math.max(48, ab.width * zoom)) / zoom;
+                  return (
+                    <g pointerEvents="none">
+                      <rect
+                        x={ab.x}
+                        y={ab.y - 20 / zoom}
+                        width={badgeW}
+                        height={18 / zoom}
+                        fill={isActiveAb ? '#1473e6' : '#323232'}
+                        rx={2 / zoom}
+                      />
+                      <clipPath id={`ab-badge-${ab.id}`}><rect x={ab.x} y={ab.y - 20 / zoom} width={badgeW - 4 / zoom} height={18 / zoom} /></clipPath>
+                      <text
+                        x={ab.x + 6 / zoom}
+                        y={ab.y - 7 / zoom}
+                        fill="#ffffff"
+                        fontSize={10 / zoom}
+                        fontWeight={600}
+                        clipPath={`url(#ab-badge-${ab.id})`}
+                      >
+                        {label}
+                      </text>
+                    </g>
+                  );
+                })()}
 
                 {activeTool === 'artboard' && isActiveAb && (
                   <g>
@@ -3057,9 +3297,13 @@ export const StudioCanvas: React.FC = () => {
                     {(
                       [
                         ['nw', ab.x, ab.y, 'nwse-resize'],
+                        ['n', ab.x + ab.width / 2, ab.y, 'ns-resize'],
                         ['ne', ab.x + ab.width, ab.y, 'nesw-resize'],
+                        ['e', ab.x + ab.width, ab.y + ab.height / 2, 'ew-resize'],
                         ['se', ab.x + ab.width, ab.y + ab.height, 'nwse-resize'],
+                        ['s', ab.x + ab.width / 2, ab.y + ab.height, 'ns-resize'],
                         ['sw', ab.x, ab.y + ab.height, 'nesw-resize'],
+                        ['w', ab.x, ab.y + ab.height / 2, 'ew-resize'],
                       ] as const
                     ).map(([hName, hx, hy, cur]) => (
                       <rect
@@ -3073,13 +3317,16 @@ export const StudioCanvas: React.FC = () => {
                         strokeWidth={1.5 / zoom}
                         style={{ cursor: cur }}
                         onPointerDown={(e) => {
+                          if (e.button !== 0) return;
                           e.stopPropagation();
+                          svgRef.current?.setPointerCapture(e.pointerId);
                           setDragAction({
                             type: 'artboard-resize',
                             artboardId: ab.id,
                             handle: hName,
                             startCanvas: screenToCanvas(e.clientX, e.clientY),
                             initialArtboard: { ...ab },
+                            snapTargets: showSmartGuides ? collectArtboardSnapTargets(doc, [ab.id]) : noSnapTargets(),
                           });
                         }}
                       />
@@ -3098,7 +3345,8 @@ export const StudioCanvas: React.FC = () => {
               <g
                 key={layer.id}
                 opacity={layer.templateMode ? 0.5 : layer.opacity ?? 1}
-                style={{ pointerEvents: layer.locked ? 'none' : 'auto' }}
+                // While isolating, everything outside the isolated object is view-only.
+                style={{ pointerEvents: layer.locked || isolatedNode ? 'none' : 'auto' }}
               >
                 {layer.nodeIds.map((nid) => {
                   const node = doc.nodes[nid];
@@ -3107,6 +3355,35 @@ export const StudioCanvas: React.FC = () => {
                 })}
               </g>
             ))}
+
+          {/* Isolation Mode: dim everything else, then draw the isolated object above it. */}
+          {isolatedNode && (() => {
+            const layer = doc.layers.find((l) => l.id === isolatedNode.layerId);
+            isolationPass.current = true;
+            let content: React.ReactNode = null;
+            try { content = renderVectorNode(isolatedNode, layer?.outlineMode); } finally { isolationPass.current = false; }
+            return (
+              <>
+                <rect
+                  data-isolation-overlay="true"
+                  x={-panX / zoom}
+                  y={-panY / zoom}
+                  width={viewportSize.width / zoom}
+                  height={viewportSize.height / zoom}
+                  fill="#808080"
+                  fillOpacity={0.55}
+                  pointerEvents="none"
+                />
+                <g
+                  data-isolated-content={isolatedNode.id}
+                  opacity={layer?.templateMode ? 0.5 : layer?.opacity ?? 1}
+                  style={{ pointerEvents: layer?.locked ? 'none' : 'auto' }}
+                >
+                  {content}
+                </g>
+              </>
+            );
+          })()}
 
           {/* 3. Draw Inside Mode Dashed Corner Frame */}
           {drawingMode === 'inside' && selectionBounds && (
@@ -3439,9 +3716,19 @@ export const StudioCanvas: React.FC = () => {
           {showBoundingBox && showEdges && !dragAction && activeTool === 'select' && hoveredNodeId && !selectedIds.includes(hoveredNodeId) && (() => {
             const node = doc.nodes[hoveredNodeId];
             if (!node) return null;
+            const hoverColor = doc.layers.find(l => l.id === node.layerId)?.color || '#4f8cff';
+            // An object without fill is highlighted along its line (like a pen path), not by a box.
+            if (!node.children?.length && !['text', 'image', 'symbol-instance', 'graph', 'mesh'].includes(node.type) && !hasPaintedFillItem(node)) {
+              const d = generateNodeSvgPath(node, doc.nodes);
+              if (d) {
+                return <path data-hover-bounds={node.id} data-hover-shape="path" d={d}
+                  transform={node.rotation ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})` : undefined}
+                  fill="none" stroke={hoverColor} strokeWidth={1.5 / zoom} pointerEvents="none" />;
+              }
+            }
             const bounds = movingSelectionBounds(collectTargetAndDescendantNodes([node.id], doc.nodes));
             if (!bounds) return null;
-            return <rect data-hover-bounds={node.id} x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} fill="none" stroke={doc.layers.find(l => l.id === node.layerId)?.color || '#4f8cff'} strokeWidth={1 / zoom} pointerEvents="none" />;
+            return <rect data-hover-bounds={node.id} x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} fill="none" stroke={hoverColor} strokeWidth={1 / zoom} pointerEvents="none" />;
           })()}
 
           {/* 6. Selection Bounding Box & 8 Resize + Rotate Handles (`Shift+Ctrl+B`) */}
@@ -3605,6 +3892,22 @@ export const StudioCanvas: React.FC = () => {
                 </g>
               );
             })()}
+
+          {/* New artboard drag preview with live size */}
+          {dragAction?.type === 'draw-artboard' && (() => {
+            const { startCanvas: s, currentCanvas: c } = dragAction;
+            const x = Math.min(s.x, c.x), y = Math.min(s.y, c.y);
+            const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
+            if (w * zoom < 1 && h * zoom < 1) return null;
+            return (
+              <g pointerEvents="none" data-artboard-preview="true">
+                <rect x={x} y={y} width={w} height={h} fill="rgba(255,255,255,0.12)" stroke="#1473e6" strokeWidth={1.5 / zoom} strokeDasharray={`${5 / zoom} ${3 / zoom}`} />
+                <text x={x + w + 6 / zoom} y={y + h + 14 / zoom} fill="#1473e6" fontSize={10 / zoom} fontWeight={600}>
+                  {Math.round(w)} × {Math.round(h)}
+                </text>
+              </g>
+            );
+          })()}
 
           {dragAction?.type === 'draw-text' && <rect x={Math.min(dragAction.startCanvas.x, dragAction.currentCanvas.x)} y={Math.min(dragAction.startCanvas.y, dragAction.currentCanvas.y)} width={Math.abs(dragAction.currentCanvas.x - dragAction.startCanvas.x)} height={Math.abs(dragAction.currentCanvas.y - dragAction.startCanvas.y)} fill="none" stroke="#1473e6" strokeWidth={1 / zoom} pointerEvents="none" />}
           {/* 8. Live Shape Drawing Preview */}

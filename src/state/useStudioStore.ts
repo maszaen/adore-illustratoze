@@ -170,6 +170,8 @@ export interface StudioStoreState {
   pasteboardMatchUI: boolean;
   language: Language;
   activeModal: ActiveModalType;
+  /** Canvas point clicked with a drawing tool; the size dialog creates the object there. */
+  creationPoint: { x: number; y: number } | null;
   statusMessage: string;
   measureInfo: {
     x1: number;
@@ -212,6 +214,8 @@ export interface StudioStoreState {
     includeSampleArtwork?: boolean;
   }) => StudioDocument;
   openDocument: (doc: StudioDocument) => void;
+  /** Reopen the documents and view from before a page reload (no status message, fresh history). */
+  restoreSession: (session: { documents: StudioDocument[]; activeId: string; showHome: boolean; view: { zoom: number; panX: number; panY: number } }) => void;
   closeDocument: (docId: string) => void;
   switchDocument: (docId: string) => void;
   setActiveDocumentId: (docId: string) => void;
@@ -319,6 +323,8 @@ export interface StudioStoreState {
   setPasteboardMatchUI: (val: boolean) => void;
   setLanguage: (lang: Language) => void;
   setActiveModal: (modal: ActiveModalType) => void;
+  /** Open a creation dialog (shape or artboard size) for a click at `point`. */
+  openCreationDialog: (modal: 'shape-dialog' | 'artboard-dialog', point: { x: number; y: number }) => void;
   setStatusMessage: (msg: string) => void;
   setMeasureInfo: (info: StudioStoreState['measureInfo']) => void;
 
@@ -459,6 +465,24 @@ export interface StudioStoreState {
   removeExportAsset: (assetId: string) => void;
 }
 
+/** Node ids in painting order, bottom to top: layers bottom-up, each subtree in child order. */
+function paintOrder(doc: StudioDocument): string[] {
+  const order: string[] = [];
+  const seen = new Set<string>();
+  const visit = (id: string) => {
+    const node = doc.nodes[id];
+    if (!node || seen.has(id)) return;
+    seen.add(id);
+    order.push(id);
+    for (const childId of node.children || []) visit(childId);
+  };
+  for (const layer of [...doc.layers].reverse()) {
+    for (const id of layer.nodeIds) if (doc.nodes[id] && !doc.nodes[id].parentId) visit(id);
+  }
+  for (const id of Object.keys(doc.nodes)) visit(id); // orphans still get a rank
+  return order;
+}
+
 const initialDoc = createDefaultDocument({
   id: 'doc-initial',
   name: 'Adore-Brand-Master.adloze',
@@ -571,6 +595,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
   pasteboardMatchUI: true,
   language: 'en',
   activeModal: null,
+  creationPoint: null,
   statusMessage: '',
   measureInfo: null,
   clipboardNodes: [],
@@ -616,6 +641,33 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
       statusMessage: `Created document "${newDoc.name}"`,
     }));
     return newDoc;
+  },
+
+  restoreSession: ({ documents, activeId, showHome, view }) => {
+    const view_ = { zoom: Math.max(0.0313, Math.min(64, view.zoom)), panX: view.panX, panY: view.panY };
+    if (!documents.length) {
+      set({ showHomeScreen: showHome, ...view_ });
+      return;
+    }
+    const active = documents.find((d) => d.id === activeId) || documents[0];
+    const histories: Record<string, { history: HistoryEntry[]; historyIndex: number }> = {};
+    for (const doc of documents) {
+      histories[doc.id] = { history: [{ id: `hist-${doc.id}-restore`, label: 'Open Document', timestamp: Date.now(), snapshot: cloneDoc(doc) }], historyIndex: 0 };
+    }
+    set({
+      documents: Object.fromEntries(documents.map((d) => [d.id, d])),
+      activeDocumentId: active.id,
+      document: active,
+      activeDocument: active,
+      documentHistories: histories,
+      history: histories[active.id].history,
+      historyIndex: 0,
+      selectedNodeIds: [], selectedIds: [], selectedAnchorIds: [], lastSelectionIds: [], keyObjectId: null,
+      isolationGroupId: null, isolatedGroupId: null,
+      showHomeScreen: showHome,
+      statusMessage: '',
+      ...view_,
+    });
   },
 
   openDocument: (doc) => {
@@ -894,7 +946,8 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     });
   },
 
-  setActiveTool: (tool) => set({ activeTool: tool, statusMessage: `Tool: ${tool}` }),
+  // The status bar already shows the active tool by name; no extra "Tool: <id>" chip.
+  setActiveTool: (tool) => set({ activeTool: tool }),
 
   setActiveProxy: (proxy) => set({ activeProxy: proxy }),
 
@@ -1136,9 +1189,13 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     }),
 
   selectAll: () => {
-    const doc = get().getActiveDocument();
+    const s = get();
+    const doc = s.getActiveDocument();
+    const isolated = s.isolationGroupId ? doc.nodes[s.isolationGroupId] : undefined;
+    // In isolation mode Select All picks the isolated group's contents (or the isolated object).
+    const inScope = (n: VectorNode) => !isolated ? !n.parentId : isolated.children?.length ? n.parentId === isolated.id : n.id === isolated.id;
     const unlockedIds = Object.values(doc.nodes)
-      .filter((n) => n.visible && !n.locked && !n.parentId)
+      .filter((n) => n.visible && !n.locked && inScope(n))
       .map((n) => n.id);
     get().selectNodes(unlockedIds, false);
   },
@@ -1233,19 +1290,50 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
 
   setAlignTarget: (target) => set({ alignTarget: target }),
 
-  enterIsolationMode: (groupId) =>
+  // Isolation focuses one object: a group (its contents become directly editable) or a single shape
+  // (isolated as-is, never grouped). Everything else is dimmed and can't be clicked.
+  enterIsolationMode: (groupId) => {
+    const node = get().getActiveDocument().nodes[groupId];
+    if (!node) return;
+    const isContainer = Boolean(node.children?.length);
     set({
       isolationGroupId: groupId,
       isolatedGroupId: groupId,
-      statusMessage: 'Isolation Mode Active — Press Esc to Exit',
-    }),
+      selectedNodeIds: isContainer ? [] : [groupId],
+      selectedIds: isContainer ? [] : [groupId],
+      selectedAnchorIds: [],
+      keyObjectId: null,
+      statusMessage: 'Isolation Mode — double-click outside or press Esc to exit',
+    });
+  },
 
-  exitIsolationMode: () =>
+  exitIsolationMode: () => {
+    const s = get();
+    const doc = s.getActiveDocument();
+    const isolated = s.isolationGroupId ? doc.nodes[s.isolationGroupId] : undefined;
+    // Items picked inside the group become the group itself again, as the Selection tool would pick it.
+    const insideIsolated = (id: string) => {
+      let current = doc.nodes[id];
+      const seen = new Set<string>();
+      while (current?.parentId && !seen.has(current.id)) {
+        if (current.parentId === isolated?.id) return true;
+        seen.add(current.id);
+        current = doc.nodes[current.parentId];
+      }
+      return false;
+    };
+    const selection = isolated?.children?.length && s.selectedNodeIds.some(insideIsolated)
+      ? [isolated.id, ...s.selectedNodeIds.filter((id) => !insideIsolated(id) && id !== isolated.id)]
+      : s.selectedNodeIds;
     set({
       isolationGroupId: null,
       isolatedGroupId: null,
+      selectedNodeIds: selection,
+      selectedIds: selection,
+      selectedAnchorIds: selection === s.selectedNodeIds ? s.selectedAnchorIds : [],
       statusMessage: 'Exited Isolation Mode',
-    }),
+    });
+  },
 
   setTargetedAppearanceId: (id) => set({ targetedAppearanceId: id }),
 
@@ -1434,17 +1522,27 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
   setPasteboardMatchUI: (val) => set({ pasteboardMatchUI: val }),
   setLanguage: (lang) => set({ language: lang }),
   setActiveModal: (modal) => set({ activeModal: modal }),
+  openCreationDialog: (modal, point) => set({ activeModal: modal, creationPoint: { x: point.x, y: point.y } }),
   setStatusMessage: (msg) => set({ statusMessage: msg }),
   setMeasureInfo: (info) => set({ measureInfo: info }),
 
   addNode: (node, label = `Create ${node.name || node.type}`) => {
     const s = get();
+    const isolated = s.isolationGroupId ? s.getActiveDocument().nodes[s.isolationGroupId] : undefined;
+    // Drawing while a group is isolated adds to that group, as in Illustrator.
+    const intoGroup = isolated?.type === 'group' ? isolated : undefined;
     s.updateDocument((d) => {
-      const targetLayer =
-        d.layers.find((l) => l.id === (node.layerId || d.activeLayerId)) || d.layers[0];
+      const targetLayer = intoGroup
+        ? d.layers.find((l) => l.id === intoGroup.layerId) || d.layers[0]
+        : d.layers.find((l) => l.id === (node.layerId || d.activeLayerId)) || d.layers[0];
       if (!targetLayer) return;
       node.layerId = targetLayer.id;
       d.nodes[node.id] = node;
+      if (intoGroup && d.nodes[intoGroup.id]) {
+        const group = d.nodes[intoGroup.id];
+        node.parentId = group.id;
+        group.children = s.drawingMode === 'behind' ? [node.id, ...(group.children || [])] : [...(group.children || []), node.id];
+      }
 
       if (s.drawingMode === 'behind') {
         targetLayer.nodeIds.unshift(node.id);
@@ -1452,6 +1550,8 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
         targetLayer.nodeIds.push(node.id);
       }
     }, label);
+    // A single isolated shape can't hold new artwork, so creating something ends that isolation.
+    if (isolated && !intoGroup) set({ isolationGroupId: null, isolatedGroupId: null });
     s.selectNodes([node.id], false);
   },
 
@@ -1648,55 +1748,71 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     }, 'Send to Back (Shift+Ctrl+[)');
   },
 
+  // Group (Ctrl+G), like Illustrator: members keep their stacking order, and the group takes the
+  // place of the top-most member (inside that member's parent group, if it has one).
   groupSelection: () => {
     const s = get();
     if (s.selectedNodeIds.length < 2) return;
     let groupId = '';
     s.updateDocument((d) => {
-      const children = s.selectedNodeIds.map((id) => d.nodes[id]).filter(Boolean);
-      if (children.length < 2) return;
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const c of children) {
-        minX = Math.min(minX, c.x);
-        minY = Math.min(minY, c.y);
-        maxX = Math.max(maxX, c.x + c.width);
-        maxY = Math.max(maxY, c.y + c.height);
+      const picked = new Set(s.selectedNodeIds.filter((id) => d.nodes[id] && !d.nodes[id].locked));
+      const hasPickedAncestor = (node: VectorNode) => {
+        let parentId = node.parentId;
+        const seen = new Set<string>();
+        while (parentId && !seen.has(parentId)) {
+          if (picked.has(parentId)) return true;
+          seen.add(parentId);
+          parentId = d.nodes[parentId]?.parentId;
+        }
+        return false;
+      };
+      const rank = new Map(paintOrder(d).map((id, index) => [id, index]));
+      const members = [...picked].map((id) => d.nodes[id]).filter((n) => !hasPickedAncestor(n))
+        .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+      if (members.length < 2) return;
+      const memberIds = new Set(members.map((m) => m.id));
+      const top = members[members.length - 1];
+      const parent = top.parentId ? d.nodes[top.parentId] : undefined;
+      const layer = d.layers.find((l) => l.id === top.layerId) || d.layers[0];
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const c of members) {
+        minX = Math.min(minX, c.x); minY = Math.min(minY, c.y);
+        maxX = Math.max(maxX, c.x + c.width); maxY = Math.max(maxY, c.y + c.height);
       }
       groupId = makeAnchorId('group');
-      const layer = d.layers.find((l) => l.id === children[0].layerId) || d.layers[0];
-      const groupNode: VectorNode = {
-        id: groupId,
-        name: '<Group>',
-        type: 'group',
-        layerId: layer.id,
-        visible: true,
-        locked: false,
-        x: minX,
-        y: minY,
-        width: Math.max(1, maxX - minX),
-        height: Math.max(1, maxY - minY),
-        rotation: 0,
-        points: [],
-        closed: true,
-        children: children.map((c) => c.id),
-        fills: [],
-        strokes: [],
-        effects: [],
-        opacity: 1,
-        blendMode: 'normal',
-      };
-      for (const c of children) {
-        c.parentId = groupId;
+      // Put the group where the top-most member was, then take the members out of their old parents.
+      if (parent) parent.children = (parent.children || []).flatMap((cid) => (cid === top.id ? [groupId] : memberIds.has(cid) ? [] : [cid]));
+      for (const m of members) {
+        const oldParent = m.parentId ? d.nodes[m.parentId] : undefined;
+        if (oldParent && oldParent !== parent) oldParent.children = (oldParent.children || []).filter((cid) => cid !== m.id);
       }
-      d.nodes[groupId] = groupNode;
-      layer.nodeIds.push(groupId);
+      if (!parent) {
+        const at = layer.nodeIds.indexOf(top.id);
+        layer.nodeIds.splice(at >= 0 ? at + 1 : layer.nodeIds.length, 0, groupId);
+      } else {
+        layer.nodeIds.push(groupId); // listed in its layer like every other node; drawn via its parent
+      }
+      for (const m of members) {
+        m.parentId = groupId;
+        if (m.layerId !== layer.id) {
+          // Members from other layers move into the group's layer.
+          for (const l of d.layers) if (l.id !== layer.id) l.nodeIds = l.nodeIds.filter((nid) => nid !== m.id);
+          if (!layer.nodeIds.includes(m.id)) layer.nodeIds.push(m.id);
+          m.layerId = layer.id;
+        }
+      }
+      d.nodes[groupId] = {
+        id: groupId, name: '<Group>', type: 'group', layerId: layer.id, parentId: parent?.id,
+        visible: true, locked: false,
+        x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY), rotation: 0,
+        points: [], closed: true, children: members.map((m) => m.id),
+        fills: [], strokes: [], effects: [], opacity: 1, blendMode: 'normal',
+      };
     }, 'Group Selection (Ctrl+G)');
     if (groupId) s.selectNodes([groupId], false);
   },
 
+  // Ungroup puts the children back where the group was in the stacking order (in its parent, or the layer).
   ungroupSelection: () => {
     const s = get();
     const releasedIds: string[] = [];
@@ -1704,11 +1820,19 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
       for (const id of s.selectedNodeIds) {
         const grp = d.nodes[id];
         if (!grp || !grp.children || grp.children.length === 0) continue;
-        for (const cid of grp.children) {
-          if (d.nodes[cid]) {
-            d.nodes[cid].parentId = undefined;
-            releasedIds.push(cid);
-          }
+        const kids = grp.children.filter((cid) => d.nodes[cid]);
+        const parent = grp.parentId ? d.nodes[grp.parentId] : undefined;
+        for (const cid of kids) {
+          d.nodes[cid].parentId = parent?.id;
+          releasedIds.push(cid);
+        }
+        if (parent) parent.children = (parent.children || []).flatMap((cid) => (cid === grp.id ? kids : [cid]));
+        const layer = d.layers.find((l) => l.nodeIds.includes(grp.id)) || d.layers.find((l) => l.id === grp.layerId);
+        if (layer && !parent) {
+          const rest = layer.nodeIds.filter((nid) => !kids.includes(nid));
+          const at = rest.indexOf(grp.id);
+          rest.splice(at >= 0 ? at : rest.length, at >= 0 ? 1 : 0, ...kids);
+          layer.nodeIds = rest;
         }
         delete d.nodes[id];
         for (const l of d.layers) {
@@ -1965,8 +2089,9 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
       const idx = d.artboards.length + 1;
       const w = spec?.width ?? last.width;
       const h = spec?.height ?? last.height;
+      const requestedId = spec?.id && !d.artboards.some((a) => a.id === spec.id) ? spec.id : undefined;
       const newAb: ArtboardItem = {
-        id: `ab-${Date.now()}`,
+        id: requestedId ?? makeAnchorId('ab'),
         name: spec?.name ?? `Artboard ${idx}`,
         x: spec?.x ?? last.x + last.width + 120,
         y: spec?.y ?? last.y,

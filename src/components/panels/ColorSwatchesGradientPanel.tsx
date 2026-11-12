@@ -358,7 +358,7 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
                   className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#3a2800] border border-[#f5a623] text-[#f5a623] text-[10px]"
                 >
                   <AlertTriangle size={11} />
-                  <span>In Gamut</span>
+                  <span>Out of Gamut</span>
                 </button>
               )}
             </div>

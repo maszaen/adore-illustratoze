@@ -202,7 +202,21 @@ export async function duplicateProjectInDb(id: string): Promise<StoredProjectRec
 
 // A fresh page session writes only its own records, so an unresolved earlier
 // recovery snapshot cannot be overwritten by startup or another open tab.
-const recoverySession = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+/** One id per browser tab. Kept in sessionStorage so a page reload is the same session, not a "crash". */
+function tabRecoverySession(): string {
+  const key = 'adore.recoverySession.v1';
+  const fresh = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    const existing = globalThis.sessionStorage?.getItem(key);
+    if (existing) return existing;
+    const id = fresh();
+    globalThis.sessionStorage?.setItem(key, id);
+    return id;
+  } catch {
+    return fresh();
+  }
+}
+const recoverySession = tabRecoverySession();
 const recoveryPrefix = `session:${recoverySession}:`;
 const recoveryWrites = new Map<string, Promise<void>>();
 export function saveCrashRecoverySnapshot(doc: StudioDocument, dirty = true): Promise<void> {
@@ -215,9 +229,33 @@ export function saveCrashRecoverySnapshot(doc: StudioDocument, dirty = true): Pr
   return write;
 }
 
+/** True when the saved project already holds this snapshot's edits (autosave writes both together). */
+async function isCoveredByProject(record: CrashRecoveryRecord): Promise<boolean> {
+  const project = await studioDb.projects.get(record.document.id);
+  if (!project) return false;
+  return (project.document.updatedAt ?? 0) >= (record.document.updatedAt ?? 0);
+}
+
+/**
+ * Work that exists only in a recovery snapshot: another tab's (or a crashed session's) edits that never
+ * reached the project store. A normal refresh or close has nothing to recover, so this returns undefined.
+ */
 export async function getCrashRecoverySnapshot(): Promise<CrashRecoveryRecord | undefined> {
   const records = await studioDb.recovery.orderBy('savedAt').reverse().toArray();
-  return records.find(record => record.dirty && !record.id.startsWith(recoveryPrefix));
+  for (const record of records) {
+    if (!record.dirty || record.id.startsWith(recoveryPrefix)) continue;
+    if (!(await isCoveredByProject(record))) return record;
+  }
+  return undefined;
+}
+
+/** Drop other sessions' snapshots whose edits are already saved in the project store. */
+export async function pruneRecoverySnapshots(): Promise<void> {
+  const records = await studioDb.recovery.toArray();
+  for (const record of records) {
+    if (record.id.startsWith(recoveryPrefix)) continue;
+    if (!record.dirty || (await isCoveredByProject(record))) await studioDb.recovery.delete(record.id);
+  }
 }
 
 /** Delete only the snapshot the user actually chose; never clear another session's newer record. */

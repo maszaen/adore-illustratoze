@@ -699,7 +699,9 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
               display: 'flex',
               alignItems: 'center',
               overflowX: 'auto',
+              overflowY: 'hidden',
               flex: 1,
+              minWidth: 0,
             }}
           >
             {grp.tabs.map((tabId) => {
@@ -1118,7 +1120,7 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
             onPointerDown={(e) => handleTabPointerDown(win.activeTab, win.id, e, true)}
             style={{ cursor: 'move' }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, overflowX: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }}>
               <span className="ai-floating-grip" title="Drag floating panel group" aria-label="Drag floating panel group"><GripVertical size={14} aria-hidden="true" /></span>
               {win.tabs.map(tab => <button key={tab} type="button" data-dock-tab={tab} data-drop-tab={dropTab?.id === tab ? dropTab.side : undefined} className={`ai-panel-tab ${win.activeTab === tab ? 'active' : ''}`} onPointerDown={event => { event.stopPropagation(); handleTabPointerDown(tab, win.id, event); }} onClick={() => { if (suppressTabClickRef.current) { suppressTabClickRef.current = false; return; } setLayout(prev => ({ ...prev, floatingWindows: prev.floatingWindows.map(item => item.id === win.id ? { ...item, activeTab: tab, minimized: false } : item) })); }}>{getPanelTitle(tab)}</button>)}
             </div>

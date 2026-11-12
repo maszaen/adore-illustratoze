@@ -5,6 +5,7 @@ import { HomeDashboard } from './components/home/HomeDashboard';
 import { TopMenuBar } from './components/workspace/TopMenuBar';
 import { ControlBar } from './components/workspace/ControlBar';
 import { useControlBarVisible } from './components/workspace/workspaceChrome';
+import { installHorizontalWheel } from './components/workspace/horizontalWheel';
 import { CanvasContextMenu } from './components/workspace/CanvasContextMenu';
 import { LeftToolbar } from './components/workspace/LeftToolbar';
 import { DockManager } from './components/workspace/DockManager';
@@ -17,7 +18,9 @@ import {
   saveCrashRecoverySnapshot,
   getCrashRecoverySnapshot,
   clearCrashRecoverySnapshot,
+  pruneRecoverySnapshots,
 } from './core/io/db';
+import { readSessionManifest, restoreSession, stashUnsavedDocuments, writeSessionManifest } from './core/io/session';
 import { createAutosaveCoordinator } from './core/io/autosave';
 import { importAdlozeFile, exportDocumentAsAdlozeFile } from './core/io/adlozeIo';
 import { parseSvgStringToVectorNodes } from './core/io/svgIo';
@@ -70,6 +73,8 @@ export const App: React.FC = () => {
 
   // Bind global Adobe Illustrator CC keyboard shortcuts
   useKeyboardShortcuts(true);
+  // Plain wheel scrolls horizontal-only strips (no Shift needed).
+  useEffect(() => installHorizontalWheel(), []);
 
   // Apply Adobe Illustrator UI Brightness theme class & data attributes
   const themeClassName = `theme-${uiBrightness}`;
@@ -94,15 +99,54 @@ export const App: React.FC = () => {
     rootEl.setAttribute('data-pasteboard', pasteboardMatchUI ? 'match' : 'white');
   }, [uiBrightness, pasteboardMatchUI, themeClassName]);
 
-  // Each page session has its own recovery records; unresolved earlier sessions
-  // remain untouched until the user chooses Restore or Dismiss.
+  // A refresh reopens what was open (documents, active tab, view) instead of the sample project.
+  // Until that finishes the editor stays blank, so the sample never flashes.
+  const sessionManifest = useRef(readSessionManifest());
+  const [hydrating, setHydrating] = useState(() => sessionManifest.current !== null);
+  const restoreStarted = useRef(false);
   useEffect(() => {
+    const manifest = sessionManifest.current;
+    if (!manifest || restoreStarted.current) return;
+    restoreStarted.current = true;
+    restoreSession(manifest, useStudioStore.getState().documents)
+      .then((session) => useStudioStore.getState().restoreSession(session))
+      .catch(() => { /* fall back to the default document */ })
+      .finally(() => setHydrating(false));
+  }, []);
+
+  // Remember what is open. Starts only after hydration so the default sample never overwrites it.
+  useEffect(() => {
+    if (hydrating) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const write = () => {
+      timer = null;
+      const s = useStudioStore.getState();
+      writeSessionManifest({
+        version: 1, openIds: Object.keys(s.documents), activeId: s.activeDocumentId, showHome: s.showHomeScreen,
+        view: { zoom: s.zoom, panX: s.panX, panY: s.panY },
+      });
+    };
+    write();
+    const unsubscribe = useStudioStore.subscribe((s, prev) => {
+      if (s.documents === prev.documents && s.activeDocumentId === prev.activeDocumentId && s.showHomeScreen === prev.showHomeScreen
+        && s.zoom === prev.zoom && s.panX === prev.panX && s.panY === prev.panY) return;
+      if (!timer) timer = setTimeout(write, 250);
+    });
+    const onPageHide = () => { if (timer) clearTimeout(timer); write(); };
+    window.addEventListener('pagehide', onPageHide);
+    return () => { unsubscribe(); if (timer) clearTimeout(timer); window.removeEventListener('pagehide', onPageHide); };
+  }, [hydrating]);
+
+  // Only work that never reached the project store (another tab, a crash) is offered for recovery.
+  // A normal refresh has nothing to recover, so no banner appears.
+  useEffect(() => {
+    if (hydrating) return;
     let cancelled = false;
-    if (!showHomeScreen) getCrashRecoverySnapshot().then(snapshot => {
+    if (!showHomeScreen) pruneRecoverySnapshots().catch(() => {}).then(() => getCrashRecoverySnapshot()).then(snapshot => {
       if (!cancelled) setCrashRecoveryBanner(snapshot ? {id:snapshot.id, document:snapshot.document, savedAt:snapshot.savedAt} : null);
     }).catch(() => { if (!cancelled) store.setStatusMessage('Recovery storage unavailable. Export a backup of your work.'); });
     return () => { cancelled = true; };
-  }, [showHomeScreen]);
+  }, [showHomeScreen, hydrating]);
 
   const autosaveRef = useRef<ReturnType<typeof createAutosaveCoordinator> | null>(null);
   if (!autosaveRef.current) autosaveRef.current = createAutosaveCoordinator(
@@ -120,8 +164,11 @@ export const App: React.FC = () => {
   }, [activeDocument]);
   useEffect(() => {
     const flush = () => autosaveRef.current?.flushAll();
-    window.addEventListener('pagehide', flush);
-    return () => { window.removeEventListener('pagehide', flush); flush(); };
+    // IndexedDB writes started during unload may not finish, so pending edits are also stashed
+    // synchronously for the reload to pick up.
+    const onPageHide = () => { stashUnsavedDocuments(autosaveRef.current?.pendingDocuments() ?? []); flush(); };
+    window.addEventListener('pagehide', onPageHide);
+    return () => { window.removeEventListener('pagehide', onPageHide); flush(); };
   }, []);
 
   // Unified File Ingestion (.adloze, .svg, .png, .jpg, .webp)
@@ -403,7 +450,7 @@ export const App: React.FC = () => {
       />
 
       {/* Crash Recovery Notification Bar (if unsaved session detected on startup) */}
-      {crashRecoveryBanner && !showHomeScreen && (
+      {crashRecoveryBanner && !showHomeScreen && !hydrating && (
         <div
           style={{
             height: 26,
@@ -460,7 +507,9 @@ export const App: React.FC = () => {
       )}
 
       {/* Main View Switcher: HomeDashboard vs. Adobe Illustrator CC Studio Workspace */}
-      {showHomeScreen ? (
+      {hydrating ? (
+        <div style={{ flex: 1, backgroundColor: 'var(--ai-bg-app)' }} aria-busy="true" aria-label="Reopening your documents" />
+      ) : showHomeScreen ? (
         <HomeDashboard onClose={() => store.setShowHomeScreen(false)} />
       ) : (
         <>

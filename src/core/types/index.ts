@@ -556,7 +556,8 @@ export type ActiveModalType =
   | 'export-svg'
   | 'preferences'
   | 'keyboard-shortcuts'
-  | 'shape-dialog';
+  | 'shape-dialog'
+  | 'artboard-dialog';
 
 export type PathfinderOp =
   | 'unite'

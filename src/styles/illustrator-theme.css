@@ -239,6 +239,31 @@ textarea {
   background: var(--ai-scrollbar-thumb-hover);
 }
 
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox has no ::-webkit-scrollbar; the standard properties would override the WebKit styling elsewhere. */
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--ai-scrollbar-thumb) var(--ai-scrollbar-track); }
+}
+
+/*
+ * Scrollbars get their own space instead of covering or squeezing content:
+ * - vertical scroll areas reserve a stable gutter, so content width never jumps;
+ * - horizontal bars size to their content, so a scrollbar adds height below the controls.
+ */
+.ai-panel-body,
+.ai-left-panel-column,
+[data-dock-column-width],
+.ai-artboards-panel {
+  scrollbar-gutter: stable;
+}
+.ai-h-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* ============================================================================
    AI BRAND BADGE & TOP MENU BAR
    ============================================================================ */
@@ -354,15 +379,19 @@ textarea {
    ============================================================================ */
 
 .ai-doctabs-bar {
-  height: 25px;
+  min-height: 25px;
   background-color: var(--ai-bg-header);
   border-bottom: 1px solid var(--ai-border-strong);
   display: flex;
   align-items: flex-end;
-  padding: 0 4px;
+  padding: 1px 4px 0;
   gap: 2px;
   overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
 }
+.ai-doctabs-bar > * { flex-shrink: 0; }
+.ai-doctabs-bar > .ai-doctab { flex-shrink: 1; min-width: 72px; }
 
 .ai-doctab {
   height: 23px;
@@ -404,17 +433,33 @@ textarea {
    ============================================================================ */
 
 .ai-controlbar {
-  height: 31px;
+  min-height: 31px;
   background-color: var(--ai-bg-controlbar);
   border-bottom: 1px solid var(--ai-border-strong);
   display: flex;
   align-items: center;
-  padding: 0 8px;
+  padding: 4px 8px;
   gap: 6px;
   overflow-x: auto;
+  overflow-y: hidden;
   white-space: nowrap;
   z-index: 90;
+  flex-shrink: 0;
 }
+.ai-controlbar > * { flex-shrink: 0; }
+.ai-controlbar-label { color: var(--ai-text-secondary); }
+.ai-controlbar-badge { min-width: 74px; font-weight: 700; color: var(--ai-text-primary); font-size: 11px; }
+.ai-controlbar-group { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ai-controlbar-menu-btn { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; }
+.ai-controlbar-menu-btn > svg:last-child { color: var(--ai-text-secondary); }
+.ai-controlbar-popover { position: fixed; z-index: 1300; top: auto; min-width: 200px; width: max-content; max-width: min(420px, calc(100vw - 8px)); }
+.ai-controlbar-popover .ai-dropdown-label { display: inline-flex; align-items: center; }
+.ai-controlbar-popover.is-panel { padding: 4px 0; }
+.ai-controlbar-overflow-row { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; }
+.ai-controlbar-overflow-row + .ai-controlbar-overflow-row { border-top: 1px solid var(--ai-border-subtle); }
+.ai-controlbar-overflow-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ai-text-secondary); }
+.ai-controlbar-overflow-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ai-controlbar-overflow-controls .ai-controlbar-group { flex-wrap: wrap; }
 
 .ai-controlbar-sep {
   width: 1px;
@@ -447,6 +492,10 @@ textarea {
 .ai-left-toolbar.cols-2 {
   width: 64px;
 }
+
+/* The tool grid's scrollbar (7px) gets its own room instead of narrowing the tool buttons. */
+.ai-left-toolbar.cols-1.has-scroll { width: 43px; }
+.ai-left-toolbar.cols-2.has-scroll { width: 71px; }
 
 .ai-tool-grid {
   display: grid;
@@ -528,7 +577,7 @@ textarea {
 }
 
 .ai-panel-tabbar {
-  height: 24px;
+  min-height: 24px;
   background-color: var(--ai-bg-panel-header);
   border-bottom: 1px solid var(--ai-border-strong);
   display: flex;
@@ -566,7 +615,8 @@ textarea {
 }
 
 .ai-panel-body {
-  padding: 6px 8px;
+  /* The right padding is smaller because the stable scrollbar gutter adds 7px there. */
+  padding: 6px 1px 6px 8px;
   overflow-y: auto;
   flex: 1;
 }
@@ -832,7 +882,22 @@ textarea {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 3px center;
 }
-.ai-panel-move-select { width: 24px; padding: 0; color: transparent; }
+/* While a canvas drag runs over panels, nothing there gets text-selected. */
+.ai-canvas-dragging, .ai-canvas-dragging * { user-select: none !important; -webkit-user-select: none !important; }
+/* Rulers follow the UI brightness theme. */
+.ai-ruler { background: var(--ai-bg-header); border-color: var(--ai-border-strong); }
+.ai-ruler-corner { color: var(--ai-text-secondary); }
+.ai-ruler-corner:hover { color: var(--ai-text-primary); background: var(--ai-bg-hover); }
+.ai-ruler-tick { stroke: var(--ai-text-muted); }
+.ai-ruler-tick-major { stroke: var(--ai-text-secondary); }
+.ai-ruler-label { fill: var(--ai-text-secondary); }
+/* Panel-header dock menu: an icon button (Illustrator's panel flyout "≡"), not an empty select box. */
+.ai-panel-move-select {
+  width: 20px; padding: 0; color: transparent; cursor: pointer; border-color: transparent; background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M5 7h14M5 12h14M5 17h14'/%3E%3C/svg%3E");
+  background-position: center;
+}
+.ai-panel-move-select:hover, .ai-panel-move-select:focus-visible { background-color: var(--ai-bg-hover, rgba(255,255,255,.08)); border-color: var(--ai-border-subtle); }
 .ai-panel-move-select option { color: var(--ai-text-primary); background: var(--ai-bg-panel); }
 .ai-paragraph-suffix { font-size: 8px; line-height: 1; margin-left: 1px; }
 

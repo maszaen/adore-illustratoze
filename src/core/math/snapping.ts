@@ -10,6 +10,26 @@ export interface SnapGuide {
   lineY?: { y: number; x1: number; x2: number };
 }
 
+/**
+ * Artboards snap only to other artboards (as in Illustrator); artwork snaps to artwork and artboards.
+ * `excludeArtboardIds` removes the artboard being dragged from its own targets.
+ */
+export function collectArtboardSnapTargets(doc: StudioDocument, excludeArtboardIds: readonly string[] = []): SnapTargets {
+  const excluded = new Set(excludeArtboardIds), targets: SnapTargets = { x: [], y: [] };
+  for (const ab of doc.artboards) {
+    if (excluded.has(ab.id)) continue;
+    for (const value of [ab.x, ab.x + ab.width / 2, ab.x + ab.width]) targets.x.push({ value, from: ab.y, to: ab.y + ab.height, label: 'artboard' });
+    for (const value of [ab.y, ab.y + ab.height / 2, ab.y + ab.height]) targets.y.push({ value, from: ab.x, to: ab.x + ab.width, label: 'artboard' });
+  }
+  return targets;
+}
+
+/** Snap a single point (a dragged corner or the start of a new shape) to the nearest target on each axis. */
+export function snapPoint(point: Point2D, targets: SnapTargets, options: { zoom: number; smart: boolean; grid: boolean; gridOrigin: Point2D }): { point: Point2D; guide: SnapGuide | null } {
+  const result = snapMove({ x: point.x, y: point.y, width: 0, height: 0 }, { x: 0, y: 0 }, targets, options);
+  return { point: { x: point.x + result.delta.x, y: point.y + result.delta.y }, guide: result.guide };
+}
+
 /** Visual axis-aligned bounds for rotated text/images as well as vectors. */
 function snapVisualBounds(node: VectorNode): BoundingBox {
   if (!node.rotation || canReflectVector(node)) return selectionNodeBounds(node);

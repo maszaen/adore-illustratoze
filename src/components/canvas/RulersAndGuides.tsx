@@ -352,7 +352,7 @@ export const RulersAndGuides: React.FC<RulersAndGuidesProps> = ({
             type="button"
             onClick={cycleUnit}
             title={`Document Unit: ${unit.toUpperCase()} (Click to cycle px / pt / mm / cm / in / pc)`}
-            className="pointer-events-auto absolute top-0 left-0 w-[20px] h-[20px] bg-[#262626] border-r border-b border-[#1a1a1a] flex items-center justify-center text-[9px] font-mono text-[#b8b8b8] hover:text-white hover:bg-[#323232] z-30 select-none"
+            className="pointer-events-auto absolute top-0 left-0 w-[20px] h-[20px] ai-ruler ai-ruler-corner border-r border-b flex items-center justify-center text-[9px] font-mono z-30 select-none"
           >
             {unit}
           </button>
@@ -371,7 +371,7 @@ export const RulersAndGuides: React.FC<RulersAndGuidesProps> = ({
               });
             }}
             title="Drag down onto canvas to create Horizontal Guide (#00ffff)"
-            className="pointer-events-auto absolute top-0 left-[20px] right-0 h-[20px] bg-[#262626] border-b border-[#1a1a1a] cursor-row-resize select-none overflow-hidden"
+            className="pointer-events-auto absolute top-0 left-[20px] right-0 h-[20px] ai-ruler border-b cursor-row-resize select-none overflow-hidden"
           >
             <svg width="100%" height="20" className="block">
               {hTicks.map((t, idx) => {
@@ -384,14 +384,14 @@ export const RulersAndGuides: React.FC<RulersAndGuidesProps> = ({
                       y1={20 - tickH}
                       x2={x}
                       y2={20}
-                      stroke={t.isMajor ? '#9e9e9e' : '#666666'}
+                      className={t.isMajor ? 'ai-ruler-tick-major' : 'ai-ruler-tick'}
                       strokeWidth={1}
                     />
                     {t.label !== undefined && (
                       <text
                         x={x + 3}
                         y={9}
-                        fill="#b0b0b0"
+                        className="ai-ruler-label"
                         fontSize="8.5"
                         fontFamily="Inter, Segoe UI, monospace"
                       >
@@ -428,7 +428,7 @@ export const RulersAndGuides: React.FC<RulersAndGuidesProps> = ({
               });
             }}
             title="Drag right onto canvas to create Vertical Guide (#00ffff)"
-            className="pointer-events-auto absolute top-[20px] left-0 bottom-0 w-[20px] bg-[#262626] border-r border-[#1a1a1a] cursor-col-resize select-none overflow-hidden"
+            className="pointer-events-auto absolute top-[20px] left-0 bottom-0 w-[20px] ai-ruler border-r cursor-col-resize select-none overflow-hidden"
           >
             <svg width="20" height="100%" className="block">
               {vTicks.map((t, idx) => {
@@ -441,14 +441,14 @@ export const RulersAndGuides: React.FC<RulersAndGuidesProps> = ({
                       y1={y}
                       x2={20}
                       y2={y}
-                      stroke={t.isMajor ? '#9e9e9e' : '#666666'}
+                      className={t.isMajor ? 'ai-ruler-tick-major' : 'ai-ruler-tick'}
                       strokeWidth={1}
                     />
                     {t.label !== undefined && (
                       <text
                         x={8}
                         y={y - 3}
-                        fill="#b0b0b0"
+                        className="ai-ruler-label"
                         fontSize="8.5"
                         fontFamily="Inter, Segoe UI, monospace"
                         transform={`rotate(-90 8 ${y - 3})`}

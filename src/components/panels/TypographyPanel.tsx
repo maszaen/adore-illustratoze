@@ -88,7 +88,9 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
 }) => {
   const store = useStudioStore() as any;
   const doc = store.document || store.activeDocument || { nodes: {}, layers: [] };
-  const unit = doc.unit || 'pt';
+  // Type values use points regardless of the document's general unit, as in Illustrator
+  // (and the Control Bar). One unit for every size, leading, shift, indent and offset.
+  const unit = 'pt';
 
   const [activeTab, setActiveTab] = useState<'character' | 'paragraph' | 'opentype'>(initialTab);
   const [customFonts, setCustomFonts] = useState<LoadedCustomFont[]>(() =>
@@ -272,6 +274,9 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
     const customNames = customFonts.map((f) => f.familyName);
     return Array.from(new Set([...customNames, ...BUILT_IN_FONTS]));
   }, [customFonts]);
+  // A stack such as "Inter, system-ui" is shown by its first family; a listed family is selected directly.
+  const firstFamily = (currentStyle.fontFamily || 'Inter').split(',')[0].trim().replace(/^['"]|['"]$/g, '') || 'Inter';
+  const familyValue = allFontFamilies.includes(firstFamily) ? firstFamily : (currentStyle.fontFamily || 'Inter');
 
   return (
     <div className="flex flex-col h-full bg-[#323232] text-[#e8e8e8] select-none text-[11px]">
@@ -342,15 +347,17 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
 
             <div className="grid grid-cols-[1fr_92px] gap-1.5">
               <select
-                value={currentStyle.fontFamily}
+                value={familyValue}
                 onChange={(e) => updateTextStyle({ fontFamily: e.target.value }, 'Font Family')}
                 className="ai-select w-full"
+                title={currentStyle.fontFamily}
               >
                 {allFontFamilies.map((fam) => (
                   <option key={fam} value={fam}>
                     {fam}
                   </option>
                 ))}
+                {!allFontFamilies.includes(familyValue) && <option value={familyValue}>{firstFamily}</option>}
               </select>
 
               <select
@@ -363,6 +370,9 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
                     {st}
                   </option>
                 ))}
+                {currentStyle.fontStyle && !FONT_STYLES.includes(currentStyle.fontStyle) && (
+                  <option value={currentStyle.fontStyle}>{currentStyle.fontStyle}</option>
+                )}
               </select>
             </div>
           </div>
@@ -567,7 +577,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
           {/* Left / Right / First-Line Indents & Space Before / After */}
           <div className="ai-form-grid pt-1 border-t border-[#222222]">
             <NumericScrubInput
-              label="Left Indent:"
+              label="Left:" title="Left Indent"
               value={currentStyle.indentLeft}
               unit="pt"
               min={0}
@@ -576,7 +586,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
               onChange={(v) => updateTextStyle({ indentLeft: v }, 'Left Indent')}
             />
             <NumericScrubInput
-              label="Right Indent:"
+              label="Right:" title="Right Indent"
               value={currentStyle.indentRight}
               unit="pt"
               min={0}
@@ -585,7 +595,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
               onChange={(v) => updateTextStyle({ indentRight: v }, 'Right Indent')}
             />
             <NumericScrubInput
-              label="First Line:"
+              label="First:" title="First-Line Left Indent"
               value={currentStyle.indentFirstLine}
               unit="pt"
               min={-200}
@@ -594,7 +604,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
               onChange={(v) => updateTextStyle({ indentFirstLine: v }, 'First Line Indent')}
             />
             <NumericScrubInput
-              label="Space Before:"
+              label="Before:" title="Space Before Paragraph"
               value={currentStyle.spaceBefore}
               unit="pt"
               min={0}
@@ -603,7 +613,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
               onChange={(v) => updateTextStyle({ spaceBefore: v }, 'Space Before')}
             />
             <NumericScrubInput
-              label="Space After:"
+              label="After:" title="Space After Paragraph"
               value={currentStyle.spaceAfter}
               unit="pt"
               min={0}
@@ -640,7 +650,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
                 }
                 className="ai-select text-[10px] w-36"
               >
-                <option value="">[Not Threaded]</option>
+                <option value="">None</option>
                 {otherTextNodes.map((tn) => (
                   <option key={tn.id} value={tn.id}>
                     {tn.name || tn.id}

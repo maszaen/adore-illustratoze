@@ -24,5 +24,7 @@ export function createAutosaveCoordinator(
       pending.set(doc.id, {doc:snapshot,timer:setTimeout(() => flush(doc.id), delay)});
     },
     flushAll() { for (const id of [...pending.keys()]) flush(id); },
+    /** Snapshots still waiting for their debounce, e.g. to stash synchronously before a reload. */
+    pendingDocuments(): StudioDocument[] { return [...pending.values()].map(item => item.doc); },
   };
 }

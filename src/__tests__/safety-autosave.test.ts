@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAutosaveCoordinator } from '../core/io/autosave';
-import { clearCrashRecoverySnapshot, getCrashRecoverySnapshot, saveCrashRecoverySnapshot, saveProjectToDb, studioDb } from '../core/io/db';
+import { clearCrashRecoverySnapshot, getCrashRecoverySnapshot, pruneRecoverySnapshots, saveCrashRecoverySnapshot, saveProjectToDb, studioDb } from '../core/io/db';
 import { createDefaultDocument } from '../core/presets/defaultPresets';
 
 const doc=(id:string,name:string)=>createDefaultDocument({id,name,includeSampleArtwork:false});
@@ -31,6 +31,17 @@ describe('autosave safety',()=>{
     await clearCrashRecoverySnapshot('latest_session');
     expect((await getCrashRecoverySnapshot())?.document.name).toBe('Other');
     expect((await studioDb.recovery.toArray()).length).toBe(2);
+  });
+  it('offers no recovery for another session whose edits already reached the project store',async()=>{
+    const saved=doc('saved','Saved work'); saved.updatedAt=500;
+    await saveProjectToDb(saved);
+    await studioDb.recovery.put({id:'session:old-tab:saved',document:saved,savedAt:600,dirty:true});
+    expect(await getCrashRecoverySnapshot()).toBeUndefined();
+    const newer=structuredClone(saved); newer.updatedAt=900; newer.name='Unsaved edit';
+    await studioDb.recovery.put({id:'session:crashed-tab:saved',document:newer,savedAt:950,dirty:true});
+    expect((await getCrashRecoverySnapshot())?.document.name).toBe('Unsaved edit');
+    await pruneRecoverySnapshots();
+    expect((await studioDb.recovery.toArray()).map(r=>r.id)).toEqual(['session:crashed-tab:saved']);
   });
   it('captures and persists project writes in invocation order',async()=>{
     const first=doc('ordered','First'); const second=doc('ordered','Second');
