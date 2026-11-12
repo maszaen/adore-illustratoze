@@ -1,3 +1,7 @@
+import { cornerDragRadius, toggleCornerSelection } from '../../core/math/liveCorners';
+import { DEFAULT_TEXT_STYLE } from '../panels/TypographyPanel';
+import { canReflectVector, getSelectionResize, resizeVectorNode, selectionNodeBounds } from '../../core/math/selectionResize';
+import { fitPointTextFrame, layoutText, textGlyphTransform } from '../../core/math/textLayout';
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useStudioStore } from '../../state/useStudioStore';
 import {
@@ -109,10 +113,13 @@ export const StudioCanvas: React.FC = () => {
     | {
         type: 'live-corner';
         nodeId: string;
-        anchorId?: string;
+        anchorId: string;
         startCanvas: Point2D;
-        initialRadius: number;
-        maxRadius: number;
+        direction: Point2D;
+        initialNodes: Record<string, VectorNode>;
+        targetIds: string[];
+        shift: boolean;
+        moved: boolean;
       }
     | {
         type: 'move-anchor';
@@ -128,6 +135,7 @@ export const StudioCanvas: React.FC = () => {
         which: 'in' | 'out';
         breakHandles: boolean;
       }
+    | { type: 'draw-text'; startCanvas: Point2D; currentCanvas: Point2D; forceArea: boolean }
     | {
         type: 'draw-shape';
         shapeTool: string;
@@ -240,6 +248,21 @@ export const StudioCanvas: React.FC = () => {
       } else if (e.key === ']') {
         setBrushRadius((r) => Math.min(200, r + 6));
       } else if (e.key === 'Escape') {
+        if (dragAction?.type === 'draw-text') setDragAction(null);
+        if (dragAction?.type === 'live-corner') {
+          store.updateDocument(draft => { for (const [id, node] of Object.entries(dragAction.initialNodes)) draft.nodes[id] = structuredClone(node); }, 'Cancel Corners', { silent: true });
+          useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
+          setDragAction(null);
+        }
+        if (dragAction?.type === 'resize-bbox') {
+          store.updateDocument(draft => {
+            for (const [id, original] of Object.entries(dragAction.initialNodes)) {
+              if (draft.nodes[id]) draft.nodes[id] = structuredClone(original);
+            }
+          }, 'Cancel Resize', { silent: true });
+          useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Resize cancelled' });
+          setDragAction(null);
+        }
         if (activeDrawingNodeId) {
           setActiveDrawingNodeId(null);
         }
@@ -391,10 +414,11 @@ export const StudioCanvas: React.FC = () => {
         return;
       }
       count++;
-      minX = Math.min(minX, n.x);
-      minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + Math.max(1, n.width));
-      maxY = Math.max(maxY, n.y + Math.max(1, n.height));
+      const box = selectionNodeBounds(n);
+      minX = Math.min(minX, box.x);
+      minY = Math.min(minY, box.y);
+      maxX = Math.max(maxX, box.x + Math.max(1, box.width));
+      maxY = Math.max(maxY, box.y + Math.max(1, box.height));
     };
 
     for (const id of selectedIds) {
@@ -772,15 +796,19 @@ export const StudioCanvas: React.FC = () => {
       return;
     }
 
-    // Type Tools (T)
+    // Click creates point text; dragging creates a permanent area frame.
+    if (activeTool === 'type' || activeTool === 'area-type') {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setDragAction({ type: 'draw-text', startCanvas: pos, currentCanvas: pos, forceArea: activeTool === 'area-type' });
+      return;
+    }
+    // Other Type Tools (T)
     if (
-      activeTool === 'type' ||
-      activeTool === 'area-type' ||
       activeTool === 'type-on-path' ||
       activeTool === 'vertical-type' ||
       activeTool === 'touch-type'
     ) {
-      const isArea = activeTool === 'area-type';
+      const isArea = false;
       const isPath = activeTool === 'type-on-path';
       const isVert = activeTool === 'vertical-type';
       const w = isArea ? 260 : 180;
@@ -1039,91 +1067,51 @@ export const StudioCanvas: React.FC = () => {
 
       case 'resize-bbox': {
         const { handle, initialBounds, initialNodes } = dragAction;
-        let newX = initialBounds.x;
-        let newY = initialBounds.y;
-        let newW = initialBounds.width;
-        let newH = initialBounds.height;
-        const dx = rawPos.x - dragAction.startCanvas.x;
-        const dy = rawPos.y - dragAction.startCanvas.y;
-
-        if (handle.includes('e')) newW = Math.max(4, initialBounds.width + dx);
-        if (handle.includes('s')) newH = Math.max(4, initialBounds.height + dy);
-        if (handle.includes('w')) {
-          const nextW = Math.max(4, initialBounds.width - dx);
-          newX = initialBounds.x + (initialBounds.width - nextW);
-          newW = nextW;
+        const delta = { x: rawPos.x - dragAction.startCanvas.x, y: rawPos.y - dragAction.startCanvas.y };
+        if (Math.abs(delta.x) < 0.001 && Math.abs(delta.y) < 0.001) {
+          store.updateDocument(draft => {
+            for (const [id, original] of Object.entries(initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original);
+          }, 'Scale Selection', { silent: true });
+          break;
         }
-        if (handle.includes('n')) {
-          const nextH = Math.max(4, initialBounds.height - dy);
-          newY = initialBounds.y + (initialBounds.height - nextH);
-          newH = nextH;
+        let transform = getSelectionResize(initialBounds, handle, delta, e.shiftKey);
+        const canReflect = Object.values(initialNodes).every(n => canReflectVector(n) || (n.type === 'text' && n.textStyle?.typeMode === 'point') || n.type === 'group' || n.type === 'clipping-group');
+        if (!canReflect && (transform.scaleX <= 0 || transform.scaleY <= 0)) {
+          // Area text, images and other special renderers do not yet support reflection.
+          transform = { ...transform, scaleX: Math.max(0.001, transform.scaleX), scaleY: Math.max(0.001, transform.scaleY) };
+          store.setStatusMessage('Flip currently supports vector shapes and point text; area text and images cannot be flipped by resizing yet.');
         }
-
-        if (e.shiftKey) {
-          const ratio = initialBounds.width / Math.max(1, initialBounds.height);
-          if (newW / newH > ratio) {
-            newW = newH * ratio;
-          } else {
-            newH = newW / ratio;
-          }
+        // Avoid a singular glyph transform at exactly zero while still allowing flips.
+        if (Object.values(initialNodes).some(n => n.type === 'text' && n.textStyle?.typeMode === 'point')) {
+          const nonzero = (value: number) => Math.abs(value) < 0.001 ? (value < 0 ? -0.001 : 0.001) : value;
+          transform = { ...transform, scaleX: nonzero(transform.scaleX), scaleY: nonzero(transform.scaleY) };
         }
-
-        const sx = newW / Math.max(1, initialBounds.width);
-        const sy = newH / Math.max(1, initialBounds.height);
-
-        store.updateDocument(
-          (targetDoc) => {
-            for (const [id, initNode] of Object.entries(initialNodes)) {
-              const liveNode = targetDoc.nodes[id];
-              if (!liveNode || liveNode.locked) continue;
-              liveNode.x = Math.round((newX + (initNode.x - initialBounds.x) * sx) * 100) / 100;
-              liveNode.y = Math.round((newY + (initNode.y - initialBounds.y) * sy) * 100) / 100;
-              liveNode.width = Math.max(2, Math.round(initNode.width * sx * 100) / 100);
-              liveNode.height = Math.max(2, Math.round(initNode.height * sy * 100) / 100);
-              if (initNode.type === 'text' && initNode.textStyle && liveNode.textStyle) {
-                if (initNode.textStyle.typeMode !== 'area') {
-                  const scaleFactor =
-                    handle === 'n' || handle === 's'
-                      ? sy
-                      : handle === 'e' || handle === 'w'
-                        ? sx
-                        : (sx + sy) / 2;
-                  liveNode.textStyle.fontSize = Math.max(
-                    4,
-                    Math.round((initNode.textStyle.fontSize || 28) * scaleFactor * 10) / 10
-                  );
-                  liveNode.textStyle.leading = Math.max(
-                    4,
-                    Math.round(
-                      (initNode.textStyle.leading || (initNode.textStyle.fontSize || 28) * 1.2) *
-                        scaleFactor *
-                        10
-                    ) / 10
-                  );
-                }
-              }
-              liveNode.points = (initNode.points || []).map((pt) => ({
-                ...pt,
-                x: newX + (pt.x - initialBounds.x) * sx,
-                y: newY + (pt.y - initialBounds.y) * sy,
-                handleIn: pt.handleIn
-                  ? {
-                      x: newX + (pt.handleIn.x - initialBounds.x) * sx,
-                      y: newY + (pt.handleIn.y - initialBounds.y) * sy,
-                    }
-                  : undefined,
-                handleOut: pt.handleOut
-                  ? {
-                      x: newX + (pt.handleOut.x - initialBounds.x) * sx,
-                      y: newY + (pt.handleOut.y - initialBounds.y) * sy,
-                    }
-                  : undefined,
-              }));
+        const { anchor, scaleX: sx, scaleY: sy } = transform;
+        const mapPoint = (point: Point2D) => ({ x: anchor.x + (point.x - anchor.x) * sx, y: anchor.y + (point.y - anchor.y) * sy });
+        store.updateDocument((targetDoc) => {
+          for (const [id, initNode] of Object.entries(initialNodes)) {
+            const liveNode = targetDoc.nodes[id];
+            if (!liveNode || liveNode.locked) continue;
+            if (canReflectVector(initNode)) {
+              Object.assign(liveNode, resizeVectorNode(initNode, transform));
+              continue;
             }
-          },
-          'Scale Selection',
-          { silent: true }
-        );
+            const p1 = mapPoint({ x: initNode.x, y: initNode.y });
+            const p2 = mapPoint({ x: initNode.x + initNode.width, y: initNode.y + initNode.height });
+            liveNode.x = Math.min(p1.x, p2.x);
+            liveNode.y = Math.min(p1.y, p2.y);
+            liveNode.width = Math.max(0.01, Math.abs(p2.x - p1.x));
+            liveNode.height = Math.max(0.01, Math.abs(p2.y - p1.y));
+            if (initNode.type === 'text' && initNode.textStyle) {
+              if (initNode.textStyle.typeMode === 'point') {
+                liveNode.textScaleX = (initNode.textScaleX ?? 1) * sx;
+                liveNode.textScaleY = (initNode.textScaleY ?? 1) * sy;
+              }
+            }
+            liveNode.points = (initNode.points || []).map(point => ({ ...point, ...mapPoint(point),
+              handleIn: point.handleIn && mapPoint(point.handleIn), handleOut: point.handleOut && mapPoint(point.handleOut) }));
+          }
+        }, 'Scale Selection', { silent: true });
         break;
       }
 
@@ -1170,32 +1158,26 @@ export const StudioCanvas: React.FC = () => {
       }
 
       case 'live-corner': {
-        const node = doc.nodes[dragAction.nodeId];
-        if (!node) break;
-        const cx = node.x + node.width / 2;
-        const cy = node.y + node.height / 2;
-        const startDistToCenter = distance2D(dragAction.startCanvas, { x: cx, y: cy });
-        const currDistToCenter = distance2D(rawPos, { x: cx, y: cy });
-        const inwardDelta = startDistToCenter - currDistToCenter;
-        const nextRadius = Math.max(
-          0,
-          Math.min(dragAction.maxRadius, Math.round((dragAction.initialRadius + inwardDelta * 0.85) * 10) / 10)
-        );
-        store.updateNode(
-          dragAction.nodeId,
-          (n) => {
-            if (!dragAction.anchorId) {
-              n.cornerRadius = nextRadius;
-            }
-            n.points = (n.points || []).map((pt) =>
-              !dragAction.anchorId || pt.id === dragAction.anchorId
-                ? { ...pt, cornerRadius: nextRadius }
-                : pt
-            );
-          },
-          'Live Corner Radius',
-          { silent: true }
-        );
+        const dx = rawPos.x - dragAction.startCanvas.x;
+        const dy = rawPos.y - dragAction.startCanvas.y;
+        if (!dragAction.moved && Math.hypot(dx, dy) * zoom < 3) break;
+        if (!dragAction.moved) setDragAction(prev => prev?.type === 'live-corner' ? { ...prev, moved: true } : prev);
+        // Signed projection, not distance to centre: dragging beyond the maximum
+        // remains clamped until the pointer actually moves back.
+        store.updateDocument(draft => {
+          for (const [id, original] of Object.entries(dragAction.initialNodes)) {
+            const node = draft.nodes[id];
+            if (!node) continue;
+            node.points = original.points.map((pt, index, points) => {
+              if (!dragAction.targetIds.includes(pt.id)) return pt;
+              const prev = points[(index - 1 + points.length) % points.length];
+              const next = points[(index + 1) % points.length];
+              const max = Math.min(distance2D(pt, prev), distance2D(pt, next)) * 0.48;
+              const radius = cornerDragRadius(pt.cornerRadius ?? original.cornerRadius ?? 0, max, dragAction.startCanvas, rawPos, dragAction.direction);
+              return { ...pt, cornerRadius: radius };
+            });
+          }
+        }, 'Live Corner Radius', { silent: true });
         break;
       }
 
@@ -1280,6 +1262,11 @@ export const StudioCanvas: React.FC = () => {
         updateNodeAnchorsAndBounds(dragAction.nodeId, nextPts, node.closed, 'Adjust Bezier Handle', {
           silent: true,
         });
+        break;
+      }
+
+      case 'draw-text': {
+        setDragAction(prev => prev?.type === 'draw-text' ? { ...prev, currentCanvas: rawPos } : prev);
         break;
       }
 
@@ -1452,12 +1439,6 @@ export const StudioCanvas: React.FC = () => {
               } else if (mode === 'scale' || mode === 'free-transform') {
                 const sx = Math.max(0.1, 1 + dx / 150);
                 const sy = e.shiftKey ? sx : Math.max(0.1, 1 + dy / 150);
-                if (initNode.type === 'text' && initNode.textStyle && liveNode.textStyle) {
-                  liveNode.textStyle.fontSize = Math.max(
-                    4,
-                    Math.round((initNode.textStyle.fontSize || 28) * sy * 10) / 10
-                  );
-                }
                 liveNode.points = (initNode.points || []).map((pt) => ({
                   ...pt,
                   x: origin.x + (pt.x - origin.x) * sx,
@@ -1484,6 +1465,10 @@ export const StudioCanvas: React.FC = () => {
               liveNode.y = bbox.y;
               liveNode.width = bbox.width;
               liveNode.height = bbox.height;
+              if ((mode === 'scale' || mode === 'free-transform') && initNode.type === 'text' && initNode.textStyle?.typeMode === 'point') {
+                liveNode.textScaleX = (initNode.textScaleX ?? 1) * bbox.width / Math.max(0.01, initNode.width);
+                liveNode.textScaleY = (initNode.textScaleY ?? 1) * bbox.height / Math.max(0.01, initNode.height);
+              }
             }
           },
           `Transform (${mode})`,
@@ -1580,6 +1565,30 @@ export const StudioCanvas: React.FC = () => {
     }
 
     if (!dragAction) return;
+
+    if (dragAction.type === 'draw-text') {
+      const start = dragAction.startCanvas;
+      const end = screenToCanvas(e.clientX, e.clientY);
+      const area = Math.hypot(end.x - start.x, end.y - start.y) * zoom >= 4;
+      if (dragAction.forceArea && !area) { setDragAction(null); return; }
+      const x = area ? Math.min(start.x, end.x) : start.x;
+      const y = area ? Math.min(start.y, end.y) : start.y;
+      const width = area ? Math.max(1, Math.abs(end.x - start.x)) : 1;
+      const height = area ? Math.max(1, Math.abs(end.y - start.y)) : 1;
+      let node = createDefaultStyledNode({
+        name: '<Type: Lorem Ipsum Dolor>', type: 'text', x, y, width, height,
+        points: createRectangleAnchors(x, y, width, height), closed: true, strokes: [],
+        textContent: 'Lorem Ipsum Dolor',
+        textStyle: { ...DEFAULT_TEXT_STYLE, ...((store as any).defaultTextStyle || {}), typeMode: area ? 'area' : 'point', wrapInFrame: false },
+      });
+      if (!area) node = fitPointTextFrame(node);
+      store.addNode(node, 'Add Type');
+      store.selectNodes([node.id], false);
+      setEditingTextNodeId(node.id);
+      setEditingTextValue(node.textContent || '');
+      setDragAction(null);
+      return;
+    }
 
     // Finalize Draw Shape
     if (dragAction.type === 'draw-shape') {
@@ -1791,6 +1800,19 @@ export const StudioCanvas: React.FC = () => {
       return;
     }
 
+    if (dragAction.type === 'live-corner' && !dragAction.moved) {
+      const ids = useStudioStore.getState().selectedAnchorIds;
+      store.setSelectedAnchorIds(toggleCornerSelection(ids, dragAction.anchorId, dragAction.shift));
+      useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
+      setDragAction(null);
+      return;
+    }
+    if (dragAction.type === 'resize-bbox' && Object.entries(dragAction.initialNodes).every(([id, original]) =>
+      JSON.stringify(useStudioStore.getState().getActiveDocument().nodes[id]) === JSON.stringify(original))) {
+      useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
+      setDragAction(null);
+      return;
+    }
     if (useStudioStore.getState().isTransactionActive) {
       store.commitTransaction();
     } else if (
@@ -2199,6 +2221,7 @@ export const StudioCanvas: React.FC = () => {
         <g
           key={node.id}
           opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
           onDoubleClick={(e) => {
             e.stopPropagation();
@@ -2223,6 +2246,7 @@ export const StudioCanvas: React.FC = () => {
         <g
           key={node.id}
           transform={transformAttr}
+          data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
         >
           {node.type === 'text' ? (
@@ -2276,6 +2300,7 @@ export const StudioCanvas: React.FC = () => {
           transform={transformAttr}
           opacity={isDimmedByIsolation ? 0.28 : node.opacity}
           filter={filterUrl}
+          data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
         >
           <image
@@ -2301,6 +2326,7 @@ export const StudioCanvas: React.FC = () => {
           }) ${node.rotation ? `rotate(${node.rotation} 32 32)` : ''}`}
           opacity={isDimmedByIsolation ? 0.28 : node.opacity}
           filter={filterUrl}
+          data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
         >
           {(sym?.paths || []).map((sp, idx) => (
@@ -2328,6 +2354,7 @@ export const StudioCanvas: React.FC = () => {
           transform={transformAttr}
           opacity={isDimmedByIsolation ? 0.28 : node.opacity}
           filter={filterUrl}
+          data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
           onDoubleClick={(e) => {
             e.stopPropagation();
@@ -2440,6 +2467,7 @@ export const StudioCanvas: React.FC = () => {
           key={node.id}
           transform={transformAttr}
           opacity={isDimmedByIsolation ? 0.28 : node.opacity}
+          data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
         >
           <path d={d} fill={node.fills?.[0]?.color || '#38bdf8'} />
@@ -2461,36 +2489,12 @@ export const StudioCanvas: React.FC = () => {
     // 5. Typography Node (Point Type, Area Type, Type on a Path, Touch Type)
     if (node.type === 'text') {
       const ts = node.textStyle;
-      const fontSize = ts?.fontSize || 28;
-      const fillHex = resolveFillOrStrokeColor(
-        node.fills?.[0]?.color || '#1e1b4b',
-        node.fills?.[0]?.globalSwatchId,
-        node.fills?.[0]?.tint
-      );
-      const strokeItem = node.strokes?.find((s) => s.visible);
-      const rawText = node.textContent || 'Text';
-      let lines = rawText.split('\n');
-      if (ts?.typeMode === 'area' && node.width > 20) {
-        const approxCharWidth = Math.max(4, fontSize * 0.56);
-        const maxCharsPerLine = Math.max(4, Math.floor(node.width / approxCharWidth));
-        const wrapped: string[] = [];
-        for (const para of lines) {
-          const words = para.split(' ');
-          let curr = '';
-          for (const w of words) {
-            if (!curr) {
-              curr = w;
-            } else if ((curr + ' ' + w).length <= maxCharsPerLine) {
-              curr += ' ' + w;
-            } else {
-              wrapped.push(curr);
-              curr = w;
-            }
-          }
-          wrapped.push(curr);
-        }
-        lines = wrapped;
-      }
+      const layout = layoutText(node);
+      const { fontSize, lines } = layout;
+      const glyph = textGlyphTransform(node);
+      const fillItem = node.fills?.find((f) => f.visible && f.type !== 'none');
+      const fillHex = fillItem ? resolveFillOrStrokeColor(fillItem.color || '#000000', fillItem.globalSwatchId, fillItem.tint) : 'none';
+      const strokeItem = node.strokes?.find((s) => s.visible && s.weight > 0);
 
       return (
         <g
@@ -2498,6 +2502,7 @@ export const StudioCanvas: React.FC = () => {
           transform={transformAttr}
           opacity={isDimmedByIsolation ? 0.28 : node.opacity}
           filter={filterUrl}
+          data-vector-node-id={node.id}
           onPointerDown={(e) => handleNodePointerDown(e, node)}
           onDoubleClick={(e) => {
             e.stopPropagation();
@@ -2513,25 +2518,25 @@ export const StudioCanvas: React.FC = () => {
             height={Math.max(10, node.height)}
             fill="transparent"
           />
+          <defs><clipPath id={`text-frame-${Array.from(node.id).map(c => c.codePointAt(0)!.toString(16)).join('-')}`} clipPathUnits="userSpaceOnUse"><rect x={node.x} y={node.y} width={Math.max(0, node.width)} height={Math.max(0, node.height)} /></clipPath></defs>
+          <g clipPath={`url(#text-frame-${Array.from(node.id).map(c => c.codePointAt(0)!.toString(16)).join('-')})`}>
+          <g transform={`matrix(${glyph.sx} 0 0 ${glyph.sy} ${glyph.tx} ${glyph.ty})`}>
           {lines.map((line, lIdx) => (
             <text
               key={lIdx}
-              x={
-                ts?.align === 'center'
-                  ? node.x + node.width / 2
-                  : ts?.align === 'right'
-                  ? node.x + node.width
-                  : node.x
-              }
-              y={node.y + fontSize + lIdx * (ts?.leading || fontSize * 1.2)}
+              x={layout.x}
+              y={layout.y + lIdx * layout.leading}
               fill={fillHex}
+              fillOpacity={fillItem?.opacity ?? 1}
+              strokeOpacity={strokeItem?.opacity ?? 1}
               stroke={strokeItem ? strokeItem.color : 'none'}
               strokeWidth={strokeItem ? strokeItem.weight : 0}
               fontFamily={ts?.fontFamily || 'Inter, sans-serif'}
               fontSize={fontSize}
               fontWeight={ts?.fontStyle?.toLowerCase().includes('bold') ? 700 : 400}
               fontStyle={ts?.fontStyle?.toLowerCase().includes('italic') ? 'italic' : 'normal'}
-              letterSpacing={`${(ts?.tracking || 0) / 50}em`}
+              letterSpacing={layout.letterSpacing}
+              xmlSpace="preserve"
               textAnchor={
                 ts?.align === 'center' ? 'middle' : ts?.align === 'right' ? 'end' : 'start'
               }
@@ -2547,6 +2552,9 @@ export const StudioCanvas: React.FC = () => {
               {line}
             </text>
           ))}
+          </g>
+          </g>
+          {layout.overflow && selectedIds.includes(node.id) && <g pointerEvents="none"><rect x={node.x + node.width - 9 / zoom} y={node.y + node.height - 9 / zoom} width={9 / zoom} height={9 / zoom} fill="#fff" stroke="#d22" strokeWidth={1 / zoom} /><text x={node.x + node.width - 4.5 / zoom} y={node.y + node.height - 1.3 / zoom} textAnchor="middle" fontSize={9 / zoom} fill="#d22">+</text></g>}
         </g>
       );
     }
@@ -2702,6 +2710,7 @@ export const StudioCanvas: React.FC = () => {
         opacity={isDimmedByIsolation ? 0.28 : node.opacity}
         filter={filterUrl}
         style={{ mixBlendMode: (node.blendMode as any) || 'normal' }}
+        data-vector-node-id={node.id}
         onPointerDown={(e) => handleNodePointerDown(e, node)}
       >
         {renderSingleInstance('base')}
@@ -2844,6 +2853,22 @@ export const StudioCanvas: React.FC = () => {
         onPointerDown={handleCanvasPointerDown}
         onPointerMove={handleCanvasPointerMove}
         onPointerUp={handleCanvasPointerUp}
+        onPointerCancel={() => {
+          if (dragAction?.type === 'draw-text') { setDragAction(null); return; }
+          if (dragAction?.type === 'live-corner') {
+            store.updateDocument(draft => { for (const [id, node] of Object.entries(dragAction.initialNodes)) draft.nodes[id] = structuredClone(node); }, 'Cancel Corners', { silent: true });
+            useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
+            setDragAction(null); return;
+          }
+          if (dragAction?.type !== 'resize-bbox') return;
+          store.updateDocument(draft => {
+            for (const [id, original] of Object.entries(dragAction.initialNodes)) {
+              if (draft.nodes[id]) draft.nodes[id] = structuredClone(original);
+            }
+          }, 'Cancel Resize', { silent: true });
+          useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Resize cancelled' });
+          setDragAction(null);
+        }}
         style={{ display: 'block', width: '100%', height: '100%' }}
       >
         {renderSvgDefs()}
@@ -3152,6 +3177,7 @@ export const StudioCanvas: React.FC = () => {
                   {(activeTool === 'select' ||
                     activeTool === 'direct-select' ||
                     activeTool === 'rounded-rectangle') &&
+                    node.type !== 'text' && node.type !== 'image' &&
                     (node.points || []).map((pt) => {
                       if (pt.pointType !== 'corner' || pt.handleIn || pt.handleOut) return null;
                       const cx = node.x + node.width / 2;
@@ -3170,6 +3196,8 @@ export const StudioCanvas: React.FC = () => {
                       return (
                         <g
                           key={`lc-${pt.id}`}
+                          data-corner-widget={pt.id}
+                          data-corner-selected={selectedAnchorIds.includes(pt.id) ? "true" : "false"}
                           style={{ cursor: 'pointer' }}
                           onPointerDown={(e) => {
                             e.stopPropagation();
@@ -3193,15 +3221,21 @@ export const StudioCanvas: React.FC = () => {
                               );
                               return;
                             }
+                            const eligible = (p: AnchorPoint) => p.pointType === 'corner' && !p.handleIn && !p.handleOut;
+                            const chosen = selectedAnchorIds.includes(pt.id)
+                              ? selectedAnchorIds
+                              : selectedAnchorIds.length ? [pt.id] : node.points.filter(eligible).map(p => p.id);
+                            const initialNodes: Record<string, VectorNode> = {};
+                            for (const selectedId of selectedIds) {
+                              const selected = doc.nodes[selectedId];
+                              if (selected && !selected.locked && selected.points.some(p => chosen.includes(p.id))) initialNodes[selectedId] = structuredClone(selected);
+                            }
+                            const direction = { x: dx / len, y: dy / len };
+                            svgRef.current?.setPointerCapture(e.pointerId);
                             store.beginTransaction('Live Corner Radius');
-                            setDragAction({
-                              type: 'live-corner',
-                              nodeId: node.id,
-                              anchorId: activeTool === 'direct-select' ? pt.id : undefined,
-                              startCanvas: screenToCanvas(e.clientX, e.clientY),
-                              initialRadius: pt.cornerRadius ?? node.cornerRadius ?? 0,
-                              maxRadius: Math.min(node.width, node.height) / 2,
-                            });
+                            setDragAction({ type: 'live-corner', nodeId: node.id, anchorId: pt.id,
+                              startCanvas: screenToCanvas(e.clientX, e.clientY), direction, initialNodes,
+                              targetIds: chosen, shift: e.shiftKey, moved: false });
                           }}
                         >
                           {/* Invisible larger hit target for easy grabbing */}
@@ -3210,11 +3244,11 @@ export const StudioCanvas: React.FC = () => {
                             cx={wx}
                             cy={wy}
                             r={5 / zoom}
-                            fill="#ffffff"
+                            fill={selectedAnchorIds.includes(pt.id) ? layerColor : "#ffffff"}
                             stroke={layerColor}
                             strokeWidth={1.4 / zoom}
                           />
-                          <circle cx={wx} cy={wy} r={2 / zoom} fill={layerColor} />
+                          <circle cx={wx} cy={wy} r={2 / zoom} fill={selectedAnchorIds.includes(pt.id) ? "#ffffff" : layerColor} />
                         </g>
                       );
                     })}
@@ -3484,9 +3518,11 @@ export const StudioCanvas: React.FC = () => {
                   return (
                     <g
                       key={hName}
+                      data-resize-handle={hName}
                       style={{ cursor: cursorType }}
                       onPointerDown={(e) => {
                         e.stopPropagation();
+                        svgRef.current?.setPointerCapture(e.pointerId);
                         const initialNodes = collectTargetAndDescendantNodes(selectedIds, doc.nodes);
                         store.beginTransaction('Scale Selection');
                         setDragAction({
@@ -3554,6 +3590,7 @@ export const StudioCanvas: React.FC = () => {
               );
             })()}
 
+          {dragAction?.type === 'draw-text' && <rect x={Math.min(dragAction.startCanvas.x, dragAction.currentCanvas.x)} y={Math.min(dragAction.startCanvas.y, dragAction.currentCanvas.y)} width={Math.abs(dragAction.currentCanvas.x - dragAction.startCanvas.x)} height={Math.abs(dragAction.currentCanvas.y - dragAction.startCanvas.y)} fill="none" stroke="#1473e6" strokeWidth={1 / zoom} pointerEvents="none" />}
           {/* 8. Live Shape Drawing Preview */}
           {dragAction?.type === 'draw-shape' &&
             (() => {

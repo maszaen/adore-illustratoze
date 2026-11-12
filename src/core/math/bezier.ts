@@ -594,6 +594,14 @@ export function anchorsToSvgPath(
   defaultCornerType: 'round' | 'inverted' | 'chamfer' = 'round'
 ): string {
   if (!points || points.length === 0) return '';
+  if (points.slice(1).some(point => point.moveTo)) {
+    const contours: AnchorPoint[][] = [];
+    for (const point of points) {
+      if (!contours.length || point.moveTo) contours.push([]);
+      contours[contours.length - 1].push(point);
+    }
+    return contours.map(contour => anchorsToSvgPath(contour.map(point => ({ ...point, moveTo: false })), closed, defaultCornerRadius, defaultCornerType)).join(' ');
+  }
   if (points.length === 1) {
     const p = points[0];
     return `M ${fmt(p.x)} ${fmt(p.y)}`;

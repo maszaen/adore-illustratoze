@@ -366,6 +366,8 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
         s.selectedIds = [res.groupNode.id];
         s.selectedNodeIds = [res.groupNode.id];
       }, expandImmediately ? 'Expand Image Trace' : 'Image Trace');
+    } catch (error) {
+      store.setStatusMessage(error instanceof Error ? error.message : 'Image Trace failed.');
     } finally {
       setIsTracing(false);
     }

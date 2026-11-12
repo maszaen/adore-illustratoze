@@ -388,46 +388,8 @@ export function traceImageDataToVectorNodes(
     }
   }
 
-  // Ensure at least one valid vector path if image was completely uniform
   if (pathNodes.length === 0) {
-    const fallbackPts: AnchorPoint[] = [
-      { id: 'pt-1', x: bounds.x, y: bounds.y, pointType: 'corner' },
-      { id: 'pt-2', x: bounds.x + bounds.width, y: bounds.y, pointType: 'corner' },
-      { id: 'pt-3', x: bounds.x + bounds.width, y: bounds.y + bounds.height, pointType: 'corner' },
-      { id: 'pt-4', x: bounds.x, y: bounds.y + bounds.height, pointType: 'corner' },
-    ];
-    pathNodes.push({
-      id: `trace-path-fallback-${Date.now()}`,
-      name: '<Path>',
-      type: 'path',
-      layerId,
-      parentId: groupId,
-      visible: true,
-      locked: false,
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: bounds.height,
-      rotation: 0,
-      points: fallbackPts,
-      closed: true,
-      fills: [
-        {
-          id: 'fill-default',
-          visible: true,
-          type: 'solid',
-          color: '#222222',
-          opacity: 1,
-          blendMode: 'normal',
-        },
-      ],
-      strokes: [],
-      effects: [],
-      opacity: 1,
-      blendMode: 'normal',
-    });
-    totalAnchors = 4;
-    usedColors.add('#222222');
+    throw new Error('Image Trace found no visible paths. The original image was not changed.');
   }
 
   const groupNode: VectorNode = {
@@ -501,7 +463,7 @@ export async function traceImageNodeToVectorNodes(
   }
 
   if (!imgData) {
-    imgData = createProceduralSampleBitmap(sampleW, sampleH);
+    throw new Error('Image Trace could not load the selected image.');
   }
 
   return traceImageDataToVectorNodes(

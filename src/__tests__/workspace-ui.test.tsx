@@ -207,3 +207,122 @@ it('keeps editor keyboard shortcuts from firing behind a modal and closes with E
   window.removeEventListener('keydown', outside);
   act(() => root.unmount()); host.remove();
 });
+
+it('uses workspace-specific Control bar settings and resets the selected workspace', async () => {
+  const { isControlBarVisible, setControlBarVisible, resetWorkspaceChrome } = await import('../components/workspace/workspaceChrome');
+  localStorage.clear();
+  expect(isControlBarVisible('essentials')).toBe(false);
+  expect(isControlBarVisible('essentials-classic')).toBe(true);
+  setControlBarVisible('essentials', true);
+  setControlBarVisible('essentials-classic', false);
+  resetWorkspaceChrome('essentials');
+  expect(isControlBarVisible('essentials')).toBe(false);
+  expect(isControlBarVisible('essentials-classic')).toBe(false);
+});
+
+it('shows a pointer-following preview and cancels a tab drag with Escape', async () => {
+  const { DockManager } = await import('../components/workspace/DockManager');
+  localStorage.clear(); useStudioStore.setState({ activeWorkspace: 'essentials', hideAllPanels: false, screenMode: 'normal' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<DockManager renderPanel={id => <span>{id}</span>}><div>Canvas</div></DockManager>));
+  const source = host.querySelector<HTMLElement>('[data-dock-tab="properties"]')!;
+  const original = document.elementFromPoint; document.elementFromPoint = () => null;
+  try {
+    act(() => source.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 })));
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100, clientY: 120 })));
+    expect(host.querySelector<HTMLElement>('.ai-panel-drag-preview')?.style.left).toBe('112px');
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(host.querySelector('.ai-panel-drag-preview')).toBeNull();
+    act(() => window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 100, clientY: 120 })));
+    expect(host.querySelectorAll('[data-dock-tab="properties"]')).toHaveLength(1);
+    expect(host.querySelector('[aria-label="Dock Properties panel"]')).toBeNull();
+  } finally { document.elementFromPoint = original; act(() => root.unmount()); host.remove(); }
+});
+
+it('opens the canvas context menu for the existing selection and closes it with Escape', async () => {
+  const { CanvasContextMenu } = await import('../components/workspace/CanvasContextMenu');
+  useStudioStore.setState({ selectedIds: ['selected-test'], clipboardNodes: [] });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<CanvasContextMenu><div>Canvas</div></CanvasContextMenu>));
+  const surface = host.querySelector('.ai-canvas-context-surface')!;
+  act(() => surface.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, button: 2, clientX: 50, clientY: 50 })));
+  expect(host.querySelector('[aria-label="Canvas context menu"]')?.textContent).toContain('1 selected');
+  expect(Array.from(host.querySelectorAll('button')).find(button => button.textContent?.includes('Paste'))?.disabled).toBe(true);
+  act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  expect(host.querySelector('[aria-label="Canvas context menu"]')).toBeNull();
+  act(() => root.unmount()); host.remove();
+});
+
+it('renders true nested menus and runs the original submenu action', () => {
+  useStudioStore.setState({ screenMode: 'normal', activeWorkspace: 'essentials-classic' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<TopMenuBar />));
+  const windowButton = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Window')!;
+  act(() => windowButton.click());
+  const menu = host.querySelector('[aria-label="Window menu"]')!;
+  const workspace = Array.from(menu.querySelectorAll('button')).find(button => button.textContent?.includes('Workspace'))!;
+  expect(menu.textContent).not.toContain('Workspace: Essentials');
+  act(() => workspace.click());
+  const sub = document.querySelector('[aria-label="Workspace submenu"]')!;
+  expect(sub).not.toBeNull();
+  const essentials = Array.from(sub.querySelectorAll('button')).find(button => button.textContent === 'Essentials')!;
+  act(() => essentials.click());
+  expect(useStudioStore.getState().activeWorkspace).toBe('essentials');
+  expect(document.querySelector('[aria-label="Workspace submenu"]')).toBeNull();
+  act(() => root.unmount()); host.remove();
+});
+
+it('moves a complete group into a floating palette and back into an existing group', async () => {
+  const { DockManager } = await import('../components/workspace/DockManager');
+  localStorage.clear(); useStudioStore.setState({ activeWorkspace: 'essentials', hideAllPanels: false, screenMode: 'normal' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<DockManager renderPanel={id => <span>{id}</span>}><div>Canvas</div></DockManager>));
+  const grip = host.querySelector<HTMLElement>('[aria-label="Drag Layers panel group"]')!;
+  const original = document.elementFromPoint; const originals = document.elementsFromPoint;
+  document.elementFromPoint = () => null;
+  try {
+    act(() => grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 })));
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100, clientY: 120 })));
+    act(() => window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 100, clientY: 120 })));
+    expect(host.querySelectorAll('[data-floating-id] .ai-panel-tab')).toHaveLength(2);
+    const target = host.querySelector<HTMLElement>('[data-dock-tab="properties"]')!;
+    document.elementsFromPoint = () => [target];
+    const floatGrip = host.querySelector<HTMLElement>('.ai-floating-grip')!;
+    act(() => floatGrip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 })));
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100, clientY: 120 })));
+    act(() => window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 100, clientY: 120 })));
+    expect(host.querySelector('[data-floating-id]')).toBeNull();
+    expect(target.closest('[data-dock-group]')?.querySelectorAll('[data-dock-tab]')).toHaveLength(3);
+  } finally { document.elementFromPoint = original; document.elementsFromPoint = originals; act(() => root.unmount()); host.remove(); }
+});
+
+it('selects an unselected artwork hit before opening the canvas context menu', async () => {
+  const { CanvasContextMenu } = await import('../components/workspace/CanvasContextMenu');
+  const doc = createDefaultDocument({ name: 'Context test' });
+  const id = Object.keys(doc.nodes)[0];
+  useStudioStore.setState({ documents: { [doc.id]: doc }, activeDocumentId: doc.id, document: doc, activeDocument: doc, selectedIds: [], selectedNodeIds: [] });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<CanvasContextMenu><div data-vector-node-id={id}>Artwork</div></CanvasContextMenu>));
+  const hit = host.querySelector<HTMLElement>('[data-vector-node-id]')!;
+  const original = document.elementsFromPoint; document.elementsFromPoint = () => [hit];
+  try {
+    act(() => hit.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, button: 2, clientX: 60, clientY: 60 })));
+    expect(useStudioStore.getState().selectedIds).toContain(id);
+    expect(host.querySelector('.ai-context-caption')?.textContent).toContain('1 selected');
+  } finally { document.elementsFromPoint = original; act(() => root.unmount()); host.remove(); }
+});
+
+it('keeps toolbar ordering separate across workspaces', async () => {
+  const { LeftToolbar } = await import('../components/workspace/LeftToolbar');
+  localStorage.clear(); useStudioStore.setState({ activeWorkspace: 'essentials', hideAllPanels: false, screenMode: 'normal' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<LeftToolbar />));
+  act(() => host.querySelector<HTMLButtonElement>('.ai-toolbar-customize')!.click());
+  const first = host.querySelector<HTMLButtonElement>('.ai-tool-grid button')!; const label = first.getAttribute('aria-label');
+  act(() => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
+  act(() => window.dispatchEvent(new CustomEvent('ai-workspace-preset', { detail: { preset: 'typography' } })));
+  expect(host.querySelector('.ai-tool-grid button')?.getAttribute('aria-label')).toBe(label);
+  act(() => window.dispatchEvent(new CustomEvent('ai-workspace-preset', { detail: { preset: 'essentials' } })));
+  expect(host.querySelectorAll('.ai-tool-grid button')[1].getAttribute('aria-label')).toBe(label);
+  act(() => root.unmount()); host.remove();
+});

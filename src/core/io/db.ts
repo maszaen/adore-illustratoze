@@ -88,7 +88,7 @@ export function generateDocumentThumbnailDataUrl(doc: StudioDocument): string {
     }
     if (orderedNodes.length === 0) {
       for (const n of Object.values(nodesMap)) {
-        if (n && n.visible !== false && !n.parentId) orderedNodes.push(n);
+        if (n && n.visible !== false && !n.parentId && !(doc.layers || []).some(layer => layer.nodeIds?.includes(n.id))) orderedNodes.push(n);
       }
     }
 
@@ -119,7 +119,7 @@ export function generateDocumentThumbnailDataUrl(doc: StudioDocument): string {
       } else if (node.points && node.points.length > 1) {
         const d = buildMiniPathD(node.points, Boolean(node.closed));
         shapes.push(
-          `<path d="${d}" fill="${node.closed ? fill : 'none'}" stroke="${stroke !== 'none' ? stroke : fill}" stroke-width="${sw}" opacity="${opacity}" />`
+          `<path d="${d}" fill="${node.closed ? fill : 'none'}" fill-rule="${node.fillRule || 'nonzero'}" stroke="${stroke !== 'none' ? stroke : fill}" stroke-width="${sw}" opacity="${opacity}" />`
         );
       } else {
         const rx = node.cornerRadius ?? 0;
@@ -144,12 +144,21 @@ function buildMiniPathD(
   points: Array<{
     x: number;
     y: number;
+    moveTo?: boolean;
     handleIn?: { x: number; y: number };
     handleOut?: { x: number; y: number };
   }>,
   closed: boolean
 ): string {
   if (!points.length) return '';
+  if (points.slice(1).some(point => point.moveTo)) {
+    const contours: typeof points[] = [];
+    for (const point of points) {
+      if (!contours.length || point.moveTo) contours.push([]);
+      contours[contours.length - 1].push(point);
+    }
+    return contours.map(contour => buildMiniPathD(contour.map(point => ({ ...point, moveTo: false })), closed)).join(' ');
+  }
   const parts: string[] = [`M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`];
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];

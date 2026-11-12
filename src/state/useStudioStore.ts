@@ -1,3 +1,4 @@
+import { fitPointTextFrame } from '../core/math/textLayout';
 import { create } from 'zustand';
 import type {
   ActiveModalType,
@@ -65,6 +66,33 @@ function cloneDoc(doc: StudioDocument): StudioDocument {
     }
   }
   return JSON.parse(JSON.stringify(doc));
+}
+
+/** Clone complete selected subtrees and remap all internal parent/child links. */
+function cloneSubtrees(source: Record<string, VectorNode>, roots: string[], dx: number, dy: number, layerId?: string) {
+  const originals: VectorNode[] = [];
+  const visited = new Set<string>();
+  const visit = (id: string) => {
+    const node = source[id];
+    if (!node || visited.has(id)) return;
+    visited.add(id); originals.push(node);
+    (node.children || []).forEach(visit);
+  };
+  roots.forEach(visit);
+  const ids = new Map(originals.map(node => [node.id, makeAnchorId('copy')]));
+  const nodes = originals.map(orig => {
+    const copy: VectorNode = JSON.parse(JSON.stringify(orig));
+    copy.id = ids.get(orig.id)!;
+    copy.parentId = orig.parentId ? ids.get(orig.parentId) : undefined;
+    copy.children = orig.children?.map(id => ids.get(id)).filter((id): id is string => !!id);
+    if (layerId) copy.layerId = layerId;
+    copy.x += dx; copy.y += dy;
+    copy.points = (copy.points || []).map(pt => ({ ...pt, id: makeAnchorId('pt'), x: pt.x + dx, y: pt.y + dy,
+      handleIn: pt.handleIn ? { x: pt.handleIn.x + dx, y: pt.handleIn.y + dy } : undefined,
+      handleOut: pt.handleOut ? { x: pt.handleOut.x + dx, y: pt.handleOut.y + dy } : undefined }));
+    return copy;
+  });
+  return { nodes, rootIds: roots.map(id => ids.get(id)).filter((id): id is string => !!id) };
 }
 
 export interface StudioStoreState {
@@ -148,6 +176,7 @@ export interface StudioStoreState {
     angle: number;
   } | null;
   clipboardNodes: VectorNode[];
+  clipboardOrigin: { x: number; y: number };
   lastTransformDelta: {
     dx: number;
     dy: number;
@@ -160,6 +189,7 @@ export interface StudioStoreState {
   // History
   history: HistoryEntry[];
   historyIndex: number;
+  documentHistories: Record<string, { history: HistoryEntry[]; historyIndex: number }>;
   isTransactionActive: boolean;
   transactionLabel: string | null;
 
@@ -540,10 +570,12 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
   statusMessage: 'Ready — Adore Illustratoze Vector Engine Active',
   measureInfo: null,
   clipboardNodes: [],
+  clipboardOrigin: { x: 0, y: 0 },
   lastTransformDelta: null,
 
   history: [initialHistoryEntry],
   historyIndex: 0,
+  documentHistories: {},
   isTransactionActive: false,
   transactionLabel: null,
 
@@ -574,6 +606,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
       selectedAnchorIds: [],
       showHomeScreen: false,
       activeModal: null,
+      documentHistories: { ...s.documentHistories, [s.activeDocumentId]: { history: s.history, historyIndex: s.historyIndex }, [newDoc.id]: { history: [entry], historyIndex: 0 } },
       history: [entry],
       historyIndex: 0,
       statusMessage: `Created document "${newDoc.name}"`,
@@ -597,6 +630,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
       selectedIds: [],
       selectedAnchorIds: [],
       showHomeScreen: false,
+      documentHistories: { ...s.documentHistories, [s.activeDocumentId]: { history: s.history, historyIndex: s.historyIndex }, [doc.id]: { history: [entry], historyIndex: 0 } },
       history: [entry],
       historyIndex: 0,
       statusMessage: `Opened "${doc.name}"`,
@@ -610,17 +644,24 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
       set({ showHomeScreen: true });
       return;
     }
+    if (!s.documents[docId]) return;
     const nextDocs = { ...s.documents };
     delete nextDocs[docId];
-    const nextActiveId = s.activeDocumentId === docId ? Object.keys(nextDocs)[0] : s.activeDocumentId;
+    const nextHistories = { ...s.documentHistories };
+    delete nextHistories[docId];
+    if (s.activeDocumentId !== docId) {
+      set({ documents: nextDocs, documentHistories: nextHistories });
+      return;
+    }
+    const nextActiveId = Object.keys(nextDocs)[0];
     const nextDoc = nextDocs[nextActiveId];
+    const restored = nextHistories[nextActiveId] || { history: [{ id: `hist-${Date.now()}`, label: 'Open Document', timestamp: Date.now(), snapshot: cloneDoc(nextDoc) }], historyIndex: 0 };
     set({
-      documents: nextDocs,
-      activeDocumentId: nextActiveId,
-      document: nextDoc,
-      activeDocument: nextDoc,
-      selectedNodeIds: [],
-      selectedIds: [],
+      documents: nextDocs, documentHistories: nextHistories,
+      activeDocumentId: nextActiveId, document: nextDoc, activeDocument: nextDoc,
+      history: restored.history, historyIndex: restored.historyIndex,
+      selectedNodeIds: [], selectedIds: [], selectedAnchorIds: [],
+      isolationGroupId: null, isolatedGroupId: null,
     });
   },
 
@@ -628,7 +669,11 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     const s = get();
     const target = s.documents[docId];
     if (!target) return;
+    if (docId === s.activeDocumentId) return;
+    const restored = s.documentHistories[docId] || { history: [{ id: `hist-${Date.now()}`, label: 'Open Document', timestamp: Date.now(), snapshot: cloneDoc(target) }], historyIndex: 0 };
     set({
+      documentHistories: { ...s.documentHistories, [s.activeDocumentId]: { history: s.history, historyIndex: s.historyIndex } },
+      history: restored.history, historyIndex: restored.historyIndex,
       activeDocumentId: docId,
       document: target,
       activeDocument: target,
@@ -656,6 +701,19 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     nextDoc.updatedAt = Date.now();
 
     updater(nextDoc, s);
+
+    // Text mode is fixed at creation. Only content/typography changes remeasure
+    // point text; selection transforms manage their own geometry inside transactions.
+    for (const [id, next] of Object.entries(nextDoc.nodes)) {
+      const previous = currentDoc.nodes[id];
+      if (!previous || previous.type !== 'text' || next.type !== 'text' || !next.textStyle) continue;
+      if (previous.textStyle?.typeMode === 'point' || previous.textStyle?.typeMode === 'area') next.textStyle.typeMode = previous.textStyle.typeMode;
+      if (options?.silent || s.isTransactionActive || next.textStyle.typeMode !== 'point') continue;
+      const keys = ['fontFamily', 'fontStyle', 'fontSize', 'leading', 'tracking', 'textCase', 'align'] as const;
+      if (next.textContent !== previous.textContent || keys.some(key => next.textStyle?.[key] !== previous.textStyle?.[key])) {
+        nextDoc.nodes[id] = fitPointTextFrame(next);
+      }
+    }
 
     if (options?.silent || s.isTransactionActive) {
       set({
@@ -1432,26 +1490,18 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     if (s.selectedNodeIds.length === 0) return;
     const newIds: string[] = [];
     s.updateDocument((d) => {
-      for (const id of s.selectedNodeIds) {
-        const orig = d.nodes[id];
-        if (!orig) continue;
-        const copy: VectorNode = JSON.parse(JSON.stringify(orig));
-        copy.id = makeAnchorId('dup');
-        copy.name = `${orig.name} Copy`;
-        copy.x += dx;
-        copy.y += dy;
-        copy.points = (copy.points || []).map((pt) => ({
-          ...pt,
-          id: makeAnchorId('pt'),
-          x: pt.x + dx,
-          y: pt.y + dy,
-          handleIn: pt.handleIn ? { x: pt.handleIn.x + dx, y: pt.handleIn.y + dy } : undefined,
-          handleOut: pt.handleOut ? { x: pt.handleOut.x + dx, y: pt.handleOut.y + dy } : undefined,
-        }));
-        d.nodes[copy.id] = copy;
-        const layer = d.layers.find((l) => l.id === copy.layerId) || d.layers[0];
-        layer?.nodeIds.push(copy.id);
-        newIds.push(copy.id);
+      const selected = new Set(s.selectedNodeIds);
+      const roots = s.selectedNodeIds.filter(id => !d.nodes[id]?.parentId || !selected.has(d.nodes[id].parentId!));
+      const cloned = cloneSubtrees(d.nodes, roots, dx, dy);
+      for (const node of cloned.nodes) {
+        d.nodes[node.id] = node;
+        if (node.parentId) (d.layers.find(l => l.id === node.layerId) || d.layers[0])?.nodeIds.push(node.id);
+      }
+      for (const id of cloned.rootIds) {
+        const node = d.nodes[id];
+        const layer = d.layers.find(l => l.id === node.layerId) || d.layers[0];
+        layer?.nodeIds.push(id);
+        newIds.push(id);
       }
     }, 'Duplicate Selection');
     set({
@@ -1463,11 +1513,19 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
   copySelection: () => {
     const s = get();
     const doc = s.getActiveDocument();
-    const copied = s.selectedNodeIds
-      .map((id) => doc.nodes[id])
-      .filter(Boolean)
-      .map((n) => JSON.parse(JSON.stringify(n)));
-    set({ clipboardNodes: copied, statusMessage: `Copied ${copied.length} object(s)` });
+    const selected = new Set(s.selectedNodeIds);
+    const roots = s.selectedNodeIds.filter(id => !doc.nodes[id]?.parentId || !selected.has(doc.nodes[id].parentId!));
+    const copied: VectorNode[] = [];
+    const seen = new Set<string>();
+    const collect = (id: string) => {
+      const node = doc.nodes[id];
+      if (!node || seen.has(id)) return;
+      seen.add(id); copied.push(JSON.parse(JSON.stringify(node)));
+      node.children?.forEach(collect);
+    };
+    roots.forEach(collect);
+    const ab = doc.artboards.find(a => a.id === doc.activeArtboardId) || doc.artboards[0];
+    set({ clipboardNodes: copied, clipboardOrigin: { x: ab?.x ?? 0, y: ab?.y ?? 0 }, statusMessage: `Copied ${roots.length} object(s)` });
   },
 
   cutSelection: () => {
@@ -1490,32 +1548,20 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
 
       for (const ab of targetArtboards) {
         if (!ab) continue;
-        for (const src of s.clipboardNodes) {
-          const copy: VectorNode = JSON.parse(JSON.stringify(src));
-          copy.id = makeAnchorId('paste');
-          const dx = mode === 'all-artboards' ? ab.x : offset;
-          const dy = mode === 'all-artboards' ? ab.y : offset;
-          copy.x += dx;
-          copy.y += dy;
-          copy.points = (copy.points || []).map((pt) => ({
-            ...pt,
-            id: makeAnchorId('pt'),
-            x: pt.x + dx,
-            y: pt.y + dy,
-            handleIn: pt.handleIn ? { x: pt.handleIn.x + dx, y: pt.handleIn.y + dy } : undefined,
-            handleOut: pt.handleOut ? { x: pt.handleOut.x + dx, y: pt.handleOut.y + dy } : undefined,
-          }));
-          const layer = d.layers.find((l) => l.id === d.activeLayerId) || d.layers[0];
-          copy.layerId = layer.id;
-          d.nodes[copy.id] = copy;
-
-          if (mode === 'in-back') {
-            layer.nodeIds.unshift(copy.id);
-          } else {
-            layer.nodeIds.push(copy.id);
-          }
-          newIds.push(copy.id);
+        const source = Object.fromEntries(s.clipboardNodes.map(node => [node.id, node]));
+        const roots = s.clipboardNodes.filter(node => !node.parentId || !source[node.parentId]).map(node => node.id);
+        const dx = mode === 'all-artboards' ? ab.x - s.clipboardOrigin.x : offset;
+        const dy = mode === 'all-artboards' ? ab.y - s.clipboardOrigin.y : offset;
+        const layer = d.layers.find(l => l.id === d.activeLayerId) || d.layers[0];
+        if (!layer) continue;
+        const cloned = cloneSubtrees(source, roots, dx, dy, layer.id);
+        for (const node of cloned.nodes) {
+          d.nodes[node.id] = node;
+          if (node.parentId) layer.nodeIds.push(node.id);
         }
+        if (mode === 'in-back') layer.nodeIds.unshift(...cloned.rootIds);
+        else layer.nodeIds.push(...cloned.rootIds);
+        newIds.push(...cloned.rootIds);
       }
     }, `Paste (${mode})`);
 
@@ -2073,38 +2119,31 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
   runPathfinder: (op, asCompoundShape = false) => {
     const s = get();
     const doc = s.getActiveDocument();
-    const selNodes = s.selectedNodeIds.map((id) => doc.nodes[id]).filter(Boolean);
+    const order = [...doc.layers].reverse().flatMap(layer => layer.nodeIds);
+    const selNodes = s.selectedNodeIds.map(id => doc.nodes[id]).filter(Boolean)
+      .sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
     if (selNodes.length < 2) {
-      set({
-        statusMessage: 'Pathfinder requires at least 2 selected vector objects.',
-      });
+      set({ statusMessage: 'Pathfinder requires at least 2 selected vector objects.' });
       return;
     }
-
-    if (
-      asCompoundShape &&
-      (op === 'unite' || op === 'minus-front' || op === 'intersect' || op === 'exclude')
-    ) {
-      let csId = '';
-      s.updateDocument((d) => {
-        csId = makeAnchorId('cshape');
-        const layer = d.layers.find((l) => l.id === selNodes[0].layerId) || d.layers[0];
-        const resultPreview = performPathfinder(selNodes, op)[0] || selNodes[0];
-        d.nodes[csId] = {
-          ...resultPreview,
-          id: csId,
-          name: `<Compound Shape (${op})>`,
-          type: 'compound-shape',
-          compoundMode: op,
-          children: selNodes.map((n) => n.id),
-        };
-        layer.nodeIds.push(csId);
-      }, `Make Compound Shape (${op})`);
-      if (csId) s.selectNodes([csId], false);
+    if (asCompoundShape) {
+      set({ statusMessage: 'Live compound shapes are not supported yet. Use the regular Pathfinder operation.' });
       return;
     }
-
-    const results = performPathfinder(selNodes, op);
+    const supported = new Set(['path', 'rectangle', 'ellipse', 'polygon', 'star']);
+    if (selNodes.some(node => !supported.has(node.type) || node.closed === false || node.parentId || node.locked ||
+      !node.visible || node.effects?.some(effect => effect.enabled) || node.envelopeSpec ||
+      !doc.layers.some(layer => layer.id === node.layerId && layer.visible && !layer.locked))) {
+      set({ statusMessage: 'Pathfinder requires unlocked, visible, closed vector shapes outside groups, without live effects.' });
+      return;
+    }
+    let results: VectorNode[];
+    try {
+      results = performPathfinder(selNodes, op);
+    } catch (error) {
+      set({ statusMessage: `Pathfinder failed; original artwork was kept. ${error instanceof Error ? error.message : ''}` });
+      return;
+    }
     if (results.length === 0) {
       set({ statusMessage: `Pathfinder ${op}: No overlapping area produced.` });
       return;
@@ -2113,17 +2152,17 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     const newIds: string[] = [];
     const oldSet = new Set(s.selectedNodeIds);
     s.updateDocument((d) => {
-      const layer = d.layers.find((l) => l.id === selNodes[0].layerId) || d.layers[0];
-      for (const oldId of oldSet) {
-        delete d.nodes[oldId];
-      }
-      layer.nodeIds = layer.nodeIds.filter((id) => !oldSet.has(id));
+      const layer = d.layers.find((l) => l.id === selNodes[selNodes.length - 1].layerId) || d.layers[0];
+      const topIndex = layer.nodeIds.lastIndexOf(selNodes[selNodes.length - 1].id);
+      const insertIndex = topIndex < 0 ? layer.nodeIds.length : layer.nodeIds.slice(0, topIndex).filter(id => !oldSet.has(id)).length;
+      for (const oldId of oldSet) delete d.nodes[oldId];
+      for (const existingLayer of d.layers) existingLayer.nodeIds = existingLayer.nodeIds.filter((id) => !oldSet.has(id));
       for (const rNode of results) {
         rNode.layerId = layer.id;
         d.nodes[rNode.id] = rNode;
-        layer.nodeIds.push(rNode.id);
         newIds.push(rNode.id);
       }
+      layer.nodeIds.splice(insertIndex, 0, ...newIds);
     }, `Pathfinder: ${op.toUpperCase()}`);
 
     s.selectNodes(newIds, false);
@@ -3015,16 +3054,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     );
   },
   toggleTextTypeMode: () => {
-    const s = get();
-    s.updateNodes(
-      s.selectedNodeIds,
-      (n) => {
-        if (n.textStyle) {
-          n.textStyle.typeMode = n.textStyle.typeMode === 'area' ? 'point' : 'area';
-        }
-      },
-      'Convert Point Type ↔ Area Type'
-    );
+    set({ statusMessage: 'Text type is fixed when created. Click for point text or drag for area text.' });
   },
 } as StudioStoreState));
 

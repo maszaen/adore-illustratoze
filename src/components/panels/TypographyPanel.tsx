@@ -138,24 +138,10 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
   }, [primaryTextNode, store.defaultTextStyle]);
 
   const updateTextStyle = (partial: Partial<TextStyle>, label = 'Update Typography') => {
-    if (typeof store.pushHistory === 'function') store.pushHistory(label);
-    useStudioStore.setState((state: any) => {
-      const next = structuredClone ? structuredClone(state) : JSON.parse(JSON.stringify(state));
-      const d = next.document || next.activeDocument || next;
-      next.defaultTextStyle = {
-        ...(next.defaultTextStyle || DEFAULT_TEXT_STYLE),
-        ...partial,
-      };
-      selectedIds.forEach((id) => {
-        const node: VectorNode | undefined = d.nodes?.[id];
-        if (!node) return;
-        node.textStyle = {
-          ...(node.textStyle || DEFAULT_TEXT_STYLE),
-          ...partial,
-        };
-      });
-      return next;
-    });
+    useStudioStore.setState((state: any) => ({ defaultTextStyle: { ...(state.defaultTextStyle || DEFAULT_TEXT_STYLE), ...partial } } as any));
+    store.updateNodes(selectedIds, (node: VectorNode) => {
+      if (node.type === 'text') node.textStyle = { ...(node.textStyle || DEFAULT_TEXT_STYLE), ...partial };
+    }, label);
   };
 
   const handleUploadFont = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -325,14 +311,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
                 value={primaryTextNode.textContent || ''}
                 onChange={(e) => {
                   const val = e.target.value;
-                  useStudioStore.setState((state: any) => {
-                    const next = structuredClone ? structuredClone(state) : JSON.parse(JSON.stringify(state));
-                    const d = next.document || next.activeDocument || next;
-                    if (d.nodes?.[primaryTextNode.id]) {
-                      d.nodes[primaryTextNode.id].textContent = val;
-                    }
-                    return next;
-                  });
+                  store.updateNode(primaryTextNode.id, { textContent: val }, 'Edit Text');
                 }}
                 className="ai-input w-full"
                 placeholder="Type text..."
@@ -654,7 +633,6 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
                 onChange={(e) =>
                   updateTextStyle(
                     {
-                      typeMode: 'area',
                       threadedNextNodeId: e.target.value || undefined,
                     },
                     'Thread Text Frame'
@@ -671,6 +649,10 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
               </select>
             </div>
 
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" disabled={currentStyle.typeMode !== 'area'} checked={!!currentStyle.wrapInFrame} onChange={e => updateTextStyle({ wrapInFrame: e.target.checked }, 'Wrap Text in Frame')} />
+              <span>Wrap Text in Frame</span>
+            </label>
             {/* Text Wrap Toggle + Offset */}
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-1.5 cursor-pointer">

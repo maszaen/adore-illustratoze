@@ -1,3 +1,5 @@
+import clipping from 'polygon-clipping';
+import type { Pair, Polygon, MultiPolygon } from 'polygon-clipping';
 import type { AnchorPoint, BoundingBox, PathfinderOp, Point2D, VectorNode } from '../types';
 import {
   computeAutoSmoothHandles,
@@ -67,7 +69,11 @@ export function nodeToPolygon(node: VectorNode, samplesPerCurve = 12): Point2D[]
         break;
     }
   }
-  return samplePathToPolygon(anchors, node.closed !== false, samplesPerCurve);
+  const polygon = samplePathToPolygon(anchors, node.closed !== false, samplesPerCurve);
+  if (!node.rotation) return polygon;
+  const cx = node.x + node.width / 2, cy = node.y + node.height / 2;
+  const angle = node.rotation * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+  return polygon.map(p => ({ x: cx + (p.x - cx) * cos - (p.y - cy) * sin, y: cy + (p.x - cx) * sin + (p.y - cy) * cos }));
 }
 
 /**
@@ -402,165 +408,87 @@ export function createNodeFromPolygon(
   };
 }
 
-/**
- * Executes any of the 10 Illustrator Pathfinder operations on an array of VectorNodes
- * (ordered from backmost [0] to frontmost [nodes.length - 1]).
- */
+/** Convert one closed vector object, including its inner contours, to clipping geometry. */
+function nodeToClippingPolygon(node: VectorNode): Polygon {
+  const contours: AnchorPoint[][] = [];
+  for (const point of node.points || []) {
+    if (!contours.length || point.moveTo) contours.push([]);
+    contours[contours.length - 1].push(point);
+  }
+  const polys = contours.length > 1
+    ? contours.map(points => nodeToPolygon({ ...node, points }, 14))
+    : [nodeToPolygon(node, 14)];
+  return polys.filter(poly => poly.length >= 3).map(poly => poly.map(p => [p.x, p.y] as Pair));
+}
+
+/** Preserve every island and every hole as real separate SVG subpaths. */
+function clippingToNodes(geometry: MultiPolygon, template: VectorNode, suffix: string): VectorNode[] {
+  return geometry.filter(poly => poly.length && poly[0].length >= 4).map(poly => {
+    const anchors = poly.flatMap((ring, index) => {
+      const coords = ring.slice(0, -1).map(([x, y]) => ({ x, y }));
+      const points = polygonToAnchors(coords, true);
+      if (index && points.length) points[0].moveTo = true;
+      return points;
+    });
+    const bounds = computeBoundingBoxFromAnchors(anchors, true);
+    return { ...template, id: makeAnchorId('node'), name: `${template.name} (${suffix})`, type: 'path' as const,
+      parentId: undefined, children: undefined, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+      rotation: 0, points: anchors, closed: true, fillRule: 'evenodd' as const, cornerRadius: 0 };
+  });
+}
+
+/** Boolean operations on filled closed shapes ordered back-to-front. Curves are sampled. */
 export function performPathfinder(nodes: VectorNode[], op: PathfinderOp): VectorNode[] {
   if (!nodes || nodes.length < 2) return nodes;
-
-  const polys = nodes.map((n) => nodeToPolygon(n, 14));
-  const topNode = nodes[nodes.length - 1];
-  const bottomNode = nodes[0];
-
+  const shapes = nodes.map(nodeToClippingPolygon);
+  if (shapes.some(shape => !shape.length || shape.some(ring => ring.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))))) {
+    throw new Error('Pathfinder requires valid closed vector paths.');
+  }
+  const first = nodes[0], top = nodes[nodes.length - 1];
   switch (op) {
-    case 'unite': {
-      let acc = polys[0];
-      for (let i = 1; i < polys.length; i++) {
-        const res = booleanPairPolygons(acc, polys[i], 'unite');
-        if (res.length > 0) acc = res[0];
-      }
-      return [createNodeFromPolygon(acc, topNode, 'Unite', true)];
-    }
-
-    case 'minus-front': {
-      let acc = polys[0];
-      for (let i = 1; i < polys.length; i++) {
-        const res = booleanPairPolygons(acc, polys[i], 'minus-front');
-        if (res.length === 0) return [];
-        acc = res[0];
-      }
-      return [createNodeFromPolygon(acc, bottomNode, 'Minus Front', true)];
-    }
-
-    case 'minus-back': {
-      let acc = polys[polys.length - 1];
-      for (let i = 0; i < polys.length - 1; i++) {
-        const res = booleanPairPolygons(acc, polys[i], 'minus-front');
-        if (res.length === 0) return [];
-        acc = res[0];
-      }
-      return [createNodeFromPolygon(acc, topNode, 'Minus Back', true)];
-    }
-
-    case 'intersect': {
-      let acc = polys[0];
-      for (let i = 1; i < polys.length; i++) {
-        const res = booleanPairPolygons(acc, polys[i], 'intersect');
-        if (res.length === 0) return [];
-        acc = res[0];
-      }
-      return [createNodeFromPolygon(acc, topNode, 'Intersect', true)];
-    }
-
-    case 'exclude': {
-      const pieces = booleanPairPolygons(polys[0], polys[1], 'exclude');
-      if (pieces.length === 0) return [];
-      const mergedAnchors: AnchorPoint[] = [];
-      for (const piece of pieces) {
-        mergedAnchors.push(...polygonToAnchors(piece, true));
-      }
-      const bounds = computeBoundingBoxFromAnchors(mergedAnchors, true);
-      return [
-        {
-          ...topNode,
-          id: makeAnchorId('excl'),
-          name: `${topNode.name} (Exclude)`,
-          type: 'path',
-          x: bounds.x,
-          y: bounds.y,
-          width: bounds.width,
-          height: bounds.height,
-          rotation: 0,
-          points: mergedAnchors,
-          closed: true,
-          fillRule: 'evenodd',
-        },
-      ];
-    }
-
-    case 'divide': {
-      const out: VectorNode[] = [];
-      const aMinusB = booleanPairPolygons(polys[0], polys[1], 'minus-front');
-      const inter = booleanPairPolygons(polys[0], polys[1], 'intersect');
-      const bMinusA = booleanPairPolygons(polys[1], polys[0], 'minus-front');
-
-      for (const p of aMinusB) {
-        if (p.length >= 3) out.push(createNodeFromPolygon(p, bottomNode, 'Divide Back', true));
-      }
-      for (const p of inter) {
-        if (p.length >= 3) out.push(createNodeFromPolygon(p, topNode, 'Divide Overlap', true));
-      }
-      for (const p of bMinusA) {
-        if (p.length >= 3) out.push(createNodeFromPolygon(p, topNode, 'Divide Front', true));
-      }
-      return out.length > 0 ? out : nodes;
-    }
-
-    case 'trim': {
-      const out: VectorNode[] = [];
-      const backTrimmed = booleanPairPolygons(polys[0], polys[1], 'minus-front');
-      for (const p of backTrimmed) {
-        if (p.length >= 3) {
-          const n = createNodeFromPolygon(p, bottomNode, 'Trimmed Back', true);
-          n.strokes = [];
-          out.push(n);
-        }
-      }
-      const frontCopy = createNodeFromPolygon(polys[1], topNode, 'Trimmed Front', true);
-      frontCopy.strokes = [];
-      out.push(frontCopy);
-      return out;
-    }
-
+    case 'unite': return clippingToNodes(clipping.union(shapes[0], ...shapes.slice(1)), top, 'Unite');
+    case 'minus-front': return clippingToNodes(clipping.difference(shapes[0], ...shapes.slice(1)), first, 'Minus Front');
+    case 'minus-back': return clippingToNodes(clipping.difference(shapes[shapes.length - 1], ...shapes.slice(0, -1)), top, 'Minus Back');
+    case 'intersect': return clippingToNodes(clipping.intersection(shapes[0], ...shapes.slice(1)), top, 'Intersect');
+    case 'exclude': return clippingToNodes(clipping.xor(shapes[0], ...shapes.slice(1)), top, 'Exclude');
+    case 'trim':
     case 'merge': {
-      const bottomFill = bottomNode.fills[0]?.color?.toLowerCase();
-      const topFill = topNode.fills[0]?.color?.toLowerCase();
-      if (bottomFill && bottomFill === topFill) {
-        return performPathfinder(nodes, 'unite');
-      }
-      return performPathfinder(nodes, 'trim');
-    }
-
-    case 'crop': {
-      const cropPoly = polys[polys.length - 1];
-      const out: VectorNode[] = [];
-      for (let i = 0; i < nodes.length - 1; i++) {
-        const clipped = booleanPairPolygons(polys[i], cropPoly, 'intersect');
-        for (const p of clipped) {
-          if (p.length >= 3) {
-            out.push(createNodeFromPolygon(p, nodes[i], 'Cropped', true));
-          }
-        }
-      }
-      return out;
-    }
-
-    case 'outline': {
-      return nodes.map((n, idx) => {
-        const strokeColor = n.fills[0]?.color && n.fills[0]?.color !== 'none'
-          ? n.fills[0].color
-          : n.strokes[0]?.color || '#1473e6';
-        const nodePoly = createNodeFromPolygon(polys[idx], n, 'Outline', false);
-        nodePoly.fills = [];
-        nodePoly.strokes = [
-          {
-            id: makeAnchorId('st'),
-            visible: true,
-            color: strokeColor,
-            weight: 1,
-            cap: 'round',
-            join: 'round',
-            miterLimit: 4,
-            align: 'center',
-            dashArray: [],
-            opacity: 1,
-            blendMode: 'normal',
-          },
-        ];
-        return nodePoly;
+      const visible = shapes.map((shape, i) => i === shapes.length - 1
+        ? clipping.union(shape)
+        : clipping.difference(shape, ...shapes.slice(i + 1)));
+      if (op === 'trim') return visible.flatMap((geo, i) => clippingToNodes(geo, { ...nodes[i], strokes: [] }, 'Trim'));
+      // Only merge simple opaque solid fills with identical appearance.
+      const groups: { key: string; geometry: MultiPolygon; node: VectorNode }[] = [];
+      visible.forEach((geo, i) => {
+        const node = nodes[i];
+        const key = JSON.stringify({ fills: node.fills.map(({ id, ...f }) => f), opacity: node.opacity, blendMode: node.blendMode });
+        const existing = groups.find(group => group.key === key);
+        if (existing) existing.geometry = clipping.union(existing.geometry, geo);
+        else groups.push({ key, geometry: geo, node });
       });
+      return groups.flatMap(group => clippingToNodes(group.geometry, { ...group.node, strokes: [] }, 'Merge'));
     }
+    case 'divide': {
+      let pieces: { geometry: MultiPolygon; node: VectorNode }[] = [];
+      shapes.forEach((shape, i) => {
+        let remainder = clipping.union(shape);
+        const next: typeof pieces = [];
+        for (const piece of pieces) {
+          const overlap = clipping.intersection(piece.geometry, shape);
+          const outside = clipping.difference(piece.geometry, shape);
+          if (outside.length) next.push({ geometry: outside, node: piece.node });
+          if (overlap.length) next.push({ geometry: overlap, node: nodes[i] });
+          remainder = clipping.difference(remainder, piece.geometry);
+        }
+        if (remainder.length) next.push({ geometry: remainder, node: nodes[i] });
+        pieces = next;
+      });
+      return pieces.flatMap(piece => clippingToNodes(piece.geometry, piece.node, 'Divide'));
+    }
+    case 'crop': return shapes.slice(0, -1).flatMap((shape, i) => clippingToNodes(clipping.intersection(shape, shapes[shapes.length - 1]), nodes[i], 'Crop'));
+    case 'outline': return nodes.map(node => ({ ...node, id: makeAnchorId('node'), name: `${node.name} (Outline)`, fills: [],
+      strokes: [{ id: makeAnchorId('st'), visible: true, color: node.fills[0]?.color || node.strokes[0]?.color || '#1473e6', weight: 1,
+        cap: 'round' as const, join: 'round' as const, miterLimit: 4, align: 'center' as const, dashArray: [], opacity: 1, blendMode: 'normal' as const }] }));
   }
 }
 

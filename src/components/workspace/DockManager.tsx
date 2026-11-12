@@ -54,13 +54,13 @@ export function createPresetLayout(preset: string): WorkspaceDockLayout {
         rightOuterColumn: [
           {
             id: 'grp-ess-top',
-            tabs: ['properties', 'character', 'transform'],
+            tabs: ['properties'],
             activeTab: 'properties',
             heightWeight: 1.2,
           },
           {
             id: 'grp-ess-bottom',
-            tabs: ['layers', 'artboards', 'appearance'],
+            tabs: ['layers', 'artboards'],
             activeTab: 'layers',
             heightWeight: 1,
           },
@@ -117,7 +117,7 @@ export function createPresetLayout(preset: string): WorkspaceDockLayout {
         rightInnerColumn: [
           {
             id: 'grp-typo-inner',
-            tabs: ['character', 'swatches', 'color'],
+            tabs: ['character', 'paragraph', 'opentype'],
             activeTab: 'character',
             heightWeight: 1,
           },
@@ -173,8 +173,9 @@ export function createPresetLayout(preset: string): WorkspaceDockLayout {
     case 'layout-print': {
       const layout = createPresetLayout('essentials');
       layout.rightOuterColumn = [
-        { id: 'grp-print-type', tabs: ['properties', 'character', 'paragraph'], activeTab: 'properties', heightWeight: 1 },
-        { id: 'grp-print-layout', tabs: ['layers', 'artboards', 'align', 'transform'], activeTab: 'layers', heightWeight: 1 },
+        { id: 'grp-print-layout', tabs: ['transform', 'align', 'pathfinder'], activeTab: 'transform', heightWeight: 1 },
+        { id: 'grp-print-type', tabs: ['character', 'paragraph', 'opentype'], activeTab: 'character', heightWeight: 1 },
+        { id: 'grp-print-document', tabs: ['layers', 'artboards', 'appearance'], activeTab: 'layers', heightWeight: 1 },
       ];
       return layout;
     }
@@ -215,8 +216,8 @@ export function createPresetLayout(preset: string): WorkspaceDockLayout {
         rightOuterColumn: [
           {
             id: 'grp-classic-outer-1',
-            tabs: ['properties', 'character', 'brushes', 'symbols'],
-            activeTab: 'properties',
+            tabs: ['character', 'brushes', 'symbols'],
+            activeTab: 'character',
             heightWeight: 1.15,
           },
           {
@@ -273,9 +274,24 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
     startX: number;
     startY: number;
     moved: boolean;
+    wholeGroup: boolean;
   } | null>(null);
   const suppressTabClickRef = useRef(false);
   const [dropGroupId, setDropGroupId] = useState<string | null>(null);
+  const [dropEdge, setDropEdge] = useState<'before' | 'after' | null>(null);
+  const [dropTab, setDropTab] = useState<{ id: string; side: 'before' | 'after' } | null>(null);
+  const [dragPreview, setDragPreview] = useState<{ panelId: string; x: number; y: number } | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanupRef.current?.(), []);
+  const [panelMenu, setPanelMenu] = useState<{ panelId: string; groupId: string; column: DockColumn; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!panelMenu) return;
+    const close = () => setPanelMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', onKey, true);
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', onKey, true); };
+  }, [panelMenu]);
   const [draggingPanel, setDraggingPanel] = useState(false);
   const [dropDestination, setDropDestination] = useState<DockColumn | null>(null);
   const [frontWindowId, setFrontWindowId] = useState<string | null>(null);
@@ -491,40 +507,86 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
   };
 
   // Drop on a group to move/reorder a tab; drop elsewhere to float it.
-  const handleTabPointerDown = (panelId: string, groupId: string, e: React.PointerEvent) => {
+  const handleTabPointerDown = (panelId: string, groupId: string, e: React.PointerEvent, wholeGroup = false) => {
     if (e.button !== 0) return;
     suppressTabClickRef.current = false;
-    dragTabRef.current = { panelId, sourceGroupId: groupId, startX: e.clientX, startY: e.clientY, moved: false };
+    dragTabRef.current = { panelId, sourceGroupId: groupId, startX: e.clientX, startY: e.clientY, moved: false, wholeGroup };
+    const edgeAt = (element: Element | null, y: number): 'before' | 'after' | null => {
+      const group = element?.closest<HTMLElement>('[data-dock-group]');
+      if (!group) return null;
+      const rect = group.getBoundingClientRect();
+      if (rect.height < 40) return null;
+      // A tab header is a merge target; the very top/bottom edge creates a group.
+      if (y - rect.top < 5) return 'before';
+      if (rect.bottom - y < 8) return 'after';
+      return null;
+    };
     const handleMove = (mv: PointerEvent) => {
       const drag = dragTabRef.current;
       if (!drag) return;
       if (Math.hypot(mv.clientX - drag.startX, mv.clientY - drag.startY) > 8) drag.moved = true;
       if (drag.moved) {
         setDraggingPanel(true);
+        setDragPreview({ panelId: drag.panelId, x: mv.clientX, y: mv.clientY });
         const element = document.elementFromPoint(mv.clientX, mv.clientY);
         const group = element?.closest<HTMLElement>('[data-dock-group]');
         setDropGroupId(group?.dataset.dockGroup || null);
+        const edge = edgeAt(element, mv.clientY);
+        setDropEdge(edge);
+        const tab = element?.closest<HTMLElement>('[data-dock-tab]');
+        const rect = tab?.getBoundingClientRect();
+        setDropTab(!edge && tab && rect && rect.width > 0 ? { id: tab.dataset.dockTab!, side: mv.clientX < rect.left + rect.width / 2 ? 'before' : 'after' } : null);
         setDropDestination((element?.closest<HTMLElement>('[data-dock-destination]')?.dataset.dockDestination as DockColumn) || null);
       }
     };
     const handleUp = (up: PointerEvent) => {
       const drag = dragTabRef.current;
       dragTabRef.current = null;
+      cleanup();
       setDropGroupId(null);
+      setDropEdge(null);
+      setDropTab(null);
+      setDragPreview(null);
       setDraggingPanel(false);
       setDropDestination(null);
-      window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', handleUp);
       if (!drag?.moved) return;
       suppressTabClickRef.current = true;
       window.setTimeout(() => { suppressTabClickRef.current = false; }, 0);
       const targetElement = document.elementFromPoint(up.clientX, up.clientY);
       const destination = targetElement?.closest<HTMLElement>('[data-dock-destination]')?.dataset.dockDestination as DockColumn | undefined;
-      if (destination) { moveTabToColumn(drag.panelId, drag.sourceGroupId, destination); return; }
+      if (destination && !drag.wholeGroup) { moveTabToColumn(drag.panelId, drag.sourceGroupId, destination); return; }
+      if (destination && drag.wholeGroup) {
+        setLayout(previous => {
+          const next: WorkspaceDockLayout = structuredClone(previous);
+          const cols: DockColumn[] = ['leftColumn', 'rightInnerColumn', 'rightOuterColumn', 'bottomRow'];
+          const source = cols.find(col => next[col].some(group => group.id === drag.sourceGroupId));
+          if (!source || source === destination) return previous;
+          const index = next[source].findIndex(group => group.id === drag.sourceGroupId);
+          const [group] = next[source].splice(index, 1); next[destination].push(group);
+          if (destination === 'leftColumn') next.leftCollapsed = false;
+          if (destination === 'bottomRow') next.bottomCollapsed = false;
+          if (destination === 'rightInnerColumn') next.rightInnerCollapsed = false;
+          if (destination === 'rightOuterColumn') next.rightOuterCollapsed = false;
+          return next;
+        }); return;
+      }
       const targetGroupId = targetElement?.closest<HTMLElement>('[data-dock-group]')?.dataset.dockGroup;
-      const targetTabId = targetElement?.closest<HTMLElement>('[data-dock-tab]')?.dataset.dockTab;
+      const targetTab = targetElement?.closest<HTMLElement>('[data-dock-tab]');
+      const targetTabId = targetTab?.dataset.dockTab;
+      const targetRect = targetTab?.getBoundingClientRect();
+      const insertAfter = Boolean(targetRect && targetRect.width > 0 && up.clientX >= targetRect.left + targetRect.width / 2);
+      const targetEdge = edgeAt(targetElement, up.clientY);
       if (!targetGroupId) {
-        tearOffTabToFloating(drag.panelId, drag.sourceGroupId, up.clientX, up.clientY);
+        if (!drag.wholeGroup) tearOffTabToFloating(drag.panelId, drag.sourceGroupId, up.clientX, up.clientY);
+        else setLayout(previous => {
+          const next: WorkspaceDockLayout = structuredClone(previous);
+          const columns = [next.leftColumn, next.rightInnerColumn, next.rightOuterColumn, next.bottomRow];
+          const source = columns.find(col => col.some(group => group.id === drag.sourceGroupId));
+          if (!source) return previous;
+          const [group] = source.splice(source.findIndex(item => item.id === drag.sourceGroupId), 1);
+          next.floatingWindows.push({ id: `float-group-${Date.now()}`, tabs: group.tabs, activeTab: group.activeTab, x: Math.max(0, Math.min(window.innerWidth - 120, up.clientX - 80)), y: Math.max(0, Math.min(window.innerHeight - 50, up.clientY - 12)), width: 280, height: 360, minimized: group.minimized });
+          return next;
+        });
         return;
       }
       setLayout((prev) => {
@@ -533,21 +595,43 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
         const source = columns.flat().find(g => g.id === drag.sourceGroupId);
         const target = columns.flat().find(g => g.id === targetGroupId);
         if (!source || !target || !source.tabs.includes(drag.panelId)) return prev;
-        if (source === target && targetTabId === drag.panelId) return prev;
-        source.tabs = source.tabs.filter(t => t !== drag.panelId);
-        if (source.activeTab === drag.panelId) source.activeTab = source.tabs[0] || '';
-        const index = targetTabId ? target.tabs.indexOf(targetTabId) : -1;
-        target.tabs.splice(index < 0 ? target.tabs.length : index, 0, drag.panelId);
-        target.activeTab = drag.panelId;
-        target.minimized = false;
+        if (source === target && (drag.wholeGroup || targetTabId === drag.panelId || (targetEdge && source.tabs.length === 1))) return prev;
+        const movingTabs = drag.wholeGroup ? [...source.tabs] : [drag.panelId];
+        source.tabs = source.tabs.filter(t => !movingTabs.includes(t));
+        if (movingTabs.includes(source.activeTab)) source.activeTab = source.tabs[0] || '';
+        if (targetEdge) {
+          const targetColumn = columns.find(col => col.includes(target))!;
+          const index = targetColumn.indexOf(target) + (targetEdge === 'after' ? 1 : 0);
+          targetColumn.splice(index, 0, { id: `grp-drag-${Date.now()}-${drag.panelId}`, tabs: movingTabs, activeTab: drag.panelId, heightWeight: 1 });
+        } else {
+          const index = targetTabId ? target.tabs.indexOf(targetTabId) : -1;
+          target.tabs.splice(index < 0 ? target.tabs.length : index + (insertAfter ? 1 : 0), 0, ...movingTabs);
+          target.activeTab = drag.panelId;
+          target.minimized = false;
+        }
         for (const col of columns) {
           for (let i = col.length - 1; i >= 0; i--) if (!col[i].tabs.length) col.splice(i, 1);
         }
         return next;
       });
     };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('keydown', onKey, true);
+      dragCleanupRef.current = null;
+    };
+    const cancel = () => {
+      cleanup(); dragTabRef.current = null; setDragPreview(null); setDraggingPanel(false); setDropGroupId(null); setDropEdge(null); setDropTab(null); setDropDestination(null);
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel(); } };
+    dragCleanupRef.current?.();
+    dragCleanupRef.current = cleanup;
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('keydown', onKey, true);
   };
 
   // Resize column width
@@ -593,11 +677,15 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
       return null;
     };
 
+    const groupAt = (x: number, y: number) => {
+      const elements = document.elementsFromPoint(x, y);
+      return elements.find(el => !el.closest(`[data-floating-id="${floatId}"]`) && el.closest('[data-dock-group]'))?.closest<HTMLElement>('[data-dock-group]') || null;
+    };
     const onMove = (mv: PointerEvent) => {
       const dx = mv.clientX - startX;
       const dy = mv.clientY - startY;
       if (Math.hypot(dx, dy) > 8) moved = true;
-      if (moved) { setDraggingPanel(true); setDropDestination(destinationAt(mv.clientX, mv.clientY)); }
+      if (moved) { setDraggingPanel(true); setDropDestination(destinationAt(mv.clientX, mv.clientY)); setDropGroupId(groupAt(mv.clientX, mv.clientY)?.dataset.dockGroup || null); }
       setLayout((prev) => ({
         ...prev,
         floatingWindows: prev.floatingWindows.map((w) =>
@@ -614,15 +702,32 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
 
     const onUp = (event: PointerEvent) => {
       const destination = moved ? destinationAt(event.clientX, event.clientY) : null;
-      setDraggingPanel(false);
-      setDropDestination(null);
+      const targetGroup = moved && !destination ? groupAt(event.clientX, event.clientY)?.dataset.dockGroup : null;
+      setDraggingPanel(false); setDropGroupId(null); setDropDestination(null);
       if (destination) dockFloatingWindowBack(floatId, destination);
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
+      else if (targetGroup) setLayout(previous => {
+        const next: WorkspaceDockLayout = structuredClone(previous);
+        const index = next.floatingWindows.findIndex(item => item.id === floatId);
+        const target = [next.leftColumn, next.rightInnerColumn, next.rightOuterColumn, next.bottomRow].flat().find(group => group.id === targetGroup);
+        if (index < 0 || !target) return previous;
+        const [floating] = next.floatingWindows.splice(index, 1);
+        target.tabs.push(...floating.tabs.filter(tab => !target.tabs.includes(tab)));
+        target.activeTab = floating.activeTab; target.minimized = false;
+        return next;
+      });
+      cleanup();
     };
-
+    const cancel = () => {
+      setLayout(prev => ({ ...prev, floatingWindows: prev.floatingWindows.map(w => w.id === floatId ? { ...w, x: origX, y: origY } : w) }));
+      setDraggingPanel(false); setDropGroupId(null); setDropDestination(null); cleanup();
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel(); } };
+    const cleanup = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', cancel); window.removeEventListener('keydown', onKey, true); dragCleanupRef.current = null; };
+    dragCleanupRef.current?.(); dragCleanupRef.current = cleanup;
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('keydown', onKey, true);
   };
 
   const renderTabGroupCard = (
@@ -635,8 +740,9 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
         key={grp.id}
         className="ai-panel-shell"
         data-dock-group={grp.id}
+        data-drop-edge={dropGroupId === grp.id ? dropEdge || undefined : undefined}
         style={{
-          outline: dropGroupId === grp.id ? '2px solid var(--ai-accent-blue)' : undefined,
+          outline: dropGroupId === grp.id && !dropEdge ? '2px solid var(--ai-accent-blue)' : undefined,
           outlineOffset: -2,
           flex: isMinimized ? '0 0 25px' : `${grp.heightWeight ?? 1} 1 0%`,
           minHeight: isMinimized ? 25 : 120,
@@ -646,6 +752,7 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
       >
         {/* Tab Bar Header */}
         <div className="ai-panel-tabbar">
+          <button type="button" className="ai-panel-group-grip" title="Drag panel group" aria-label={`Drag ${getPanelTitle(grp.activeTab)} panel group`} onPointerDown={event => handleTabPointerDown(grp.activeTab, grp.id, event, true)}>⠿</button>
           <div
             style={{
               display: 'flex',
@@ -662,8 +769,10 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
                   type="button"
                   className={`ai-panel-tab ${isActive ? 'active' : ''}`}
                   data-dock-tab={tabId}
+                  data-drop-tab={dropTab?.id === tabId ? dropTab.side : undefined}
                   title={`${getPanelTitle(tabId)} (Drag to reorder, move or float; double-click to collapse)`}
                   onPointerDown={(e) => handleTabPointerDown(tabId, grp.id, e)}
+                  onContextMenu={e => { e.preventDefault(); setPanelMenu({ panelId: tabId, groupId: grp.id, column: columnKey, x: Math.max(4, Math.min(e.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(e.clientY, window.innerHeight - 100)) }); }}
                   onClick={() => {
                     if (suppressTabClickRef.current) { suppressTabClickRef.current = false; return; }
                     setLayout((prev) => ({
@@ -791,8 +900,12 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
                 key={tabId}
                 type="button"
                 className={`ai-tool-btn ${isFlyoutOpen ? 'active' : ''}`}
+                data-dock-group={grp.id} data-dock-tab={tabId}
+                data-drop-tab={dropTab?.id === tabId ? dropTab.side : undefined}
                 title={`${getPanelTitle(tabId)} (Click to open Flyout)`}
+                onPointerDown={event => handleTabPointerDown(tabId, grp.id, event)}
                 onClick={() => {
+                  if (suppressTabClickRef.current) { suppressTabClickRef.current = false; return; }
                   if (isFlyoutOpen) {
                     setActiveFlyoutGroup(null);
                   } else {
@@ -809,6 +922,7 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
                   fontSize: 10,
                   fontWeight: 700,
                   letterSpacing: -0.3,
+                  outline: dropGroupId === grp.id ? '2px solid var(--ai-accent-blue)' : undefined,
                 }}
               >
                 {getPanelShortIcon(tabId)}
@@ -1047,6 +1161,7 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
       {layout.floatingWindows.map((win) => (
         <div
           key={win.id}
+          data-floating-id={win.id}
           className="ai-panel-shell"
           onPointerDownCapture={() => setFrontWindowId(win.id)}
           onPointerUpCapture={(event) => {
@@ -1077,10 +1192,9 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
             onPointerDown={(e) => handleDragFloatingWindow(win.id, e)}
             style={{ cursor: 'move' }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingLeft: 6 }}>
-              <span style={{ fontWeight: 600, color: 'var(--ai-text-primary)' }}>
-                {getPanelTitle(win.activeTab)}
-              </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, overflowX: 'auto' }}>
+              <span className="ai-floating-grip" title="Drag floating panel group" aria-label="Drag floating panel group">⠿</span>
+              {win.tabs.map(tab => <button key={tab} type="button" className={`ai-panel-tab ${win.activeTab === tab ? 'active' : ''}`} onPointerDown={event => event.stopPropagation()} onClick={() => setLayout(prev => ({ ...prev, floatingWindows: prev.floatingWindows.map(item => item.id === win.id ? { ...item, activeTab: tab, minimized: false } : item) }))}>{getPanelTitle(tab)}</button>)}
             </div>
             <div
               style={{ display: 'flex', alignItems: 'center', gap: 2, paddingRight: 3 }}
@@ -1155,6 +1269,23 @@ export const DockManager: React.FC<DockManagerProps> = ({ renderPanel, children 
           </div>}
         </div>
         {dockContent}
+        {dragPreview && <div className="ai-panel-drag-preview" aria-hidden="true" style={{ left: dragPreview.x + 12, top: dragPreview.y + 12 }}><div>{getPanelTitle(dragPreview.panelId)}</div><span>Drag to dock or release to float</span></div>}
+        {panelMenu && <div className="ai-dropdown-menu ai-panel-context-menu" role="menu" aria-label="Panel context menu" style={{ left: panelMenu.x, top: panelMenu.y }} onPointerDown={e => e.stopPropagation()}>
+          <button type="button" role="menuitem" className="ai-dropdown-item" onClick={() => { tearOffTabToFloating(panelMenu.panelId, panelMenu.groupId); setPanelMenu(null); }}>Float panel</button>
+          <button type="button" role="menuitem" className="ai-dropdown-item" onClick={() => {
+            setLayout(previous => {
+              const next: WorkspaceDockLayout = JSON.parse(JSON.stringify(previous));
+              const groups = next[panelMenu.column];
+              const group = groups.find(item => item.id === panelMenu.groupId);
+              if (!group) return previous;
+              group.tabs = group.tabs.filter(tab => tab !== panelMenu.panelId);
+              if (group.activeTab === panelMenu.panelId) group.activeTab = group.tabs[0] || '';
+              if (!group.tabs.length) groups.splice(groups.indexOf(group), 1);
+              return next;
+            });
+            setPanelMenu(null);
+          }}>Close panel</button>
+        </div>}
       </div>
     );
   }

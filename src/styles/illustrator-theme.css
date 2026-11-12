@@ -699,7 +699,6 @@ textarea {
 .ai-properties-grid strong { color: var(--ai-text-primary); font-weight: 500; }
 .ai-properties-hint { color: var(--ai-text-secondary); line-height: 1.5; overflow-wrap: anywhere; }
 .ai-properties-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.ai-menubar > div:first-child > div:nth-last-child(-n+2) > .ai-dropdown-menu { left: auto; right: 0; }
 .ai-panel-body { min-height: 0; }
 .ai-panel-tabbar > div { min-width: 0; }
 @media (max-width: 1100px) {
@@ -749,3 +748,35 @@ textarea {
   .ai-new-document-presets { flex: none !important; max-height: 180px !important; }
   .ai-new-document-details { width: 100% !important; }
 }
+/* Size menus to their content; keep each command and its shortcut on one line. */
+.ai-menubar-dropdown { width: max-content; min-width: 228px; max-width: min(560px, calc(100vw - 12px)); }
+.ai-dropdown-item { gap: 12px; white-space: nowrap; }
+.ai-dropdown-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ai-dropdown-item .ai-shortcut { flex: none; margin-left: auto; }
+.ai-canvas-context-surface { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.ai-canvas-context-menu { position: fixed; z-index: 1400; }
+.ai-context-caption { padding: 4px 10px; color: var(--ai-text-secondary); border-bottom: 1px solid var(--ai-border-subtle); }
+.ai-panel-drag-preview { position: fixed; z-index: 1500; width: 190px; pointer-events: none; border: 1px solid var(--ai-accent-blue); background: var(--ai-bg-panel); color: var(--ai-text-primary); opacity: .9; box-shadow: var(--ai-shadow-floating); }
+.ai-panel-drag-preview > div { padding: 5px 8px; background: var(--ai-bg-panel-header); font-weight: 600; }
+.ai-panel-drag-preview > span { display: block; padding: 12px 8px; color: var(--ai-text-secondary); }
+.ai-panel-shell[data-drop-edge] { position: relative; }
+.ai-panel-shell[data-drop-edge]::after { content: ''; position: absolute; z-index: 300; left: 0; right: 0; height: 4px; background: var(--ai-accent-blue); pointer-events: none; }
+.ai-panel-shell[data-drop-edge='before']::after { top: 0; }
+.ai-panel-shell[data-drop-edge='after']::after { bottom: 0; }
+.ai-panel-context-menu { position: fixed; z-index: 1500; min-width: 180px; }
+.ai-toolbar-dock-indicator { position: fixed; z-index: 949; left: 0; top: 54px; bottom: 22px; width: 5px; background: var(--ai-accent-blue); pointer-events: none; }
+.ai-submenu { position: fixed; z-index: 1500; width: max-content; min-width: 200px; max-width: min(500px, calc(100vw - 8px)); max-height: calc(100vh - 8px); }
+.ai-menu-check { position: absolute; left: 7px; font-weight: 700; }
+.ai-panel-group-grip { width: 15px; height: 22px; border: 0; padding: 0; flex: none; color: var(--ai-text-secondary); background: transparent; cursor: grab; touch-action: none; }
+.ai-panel-group-grip:hover { background: var(--ai-bg-hover); color: var(--ai-text-primary); }
+.ai-floating-grip { padding: 0 5px; color: var(--ai-text-secondary); cursor: move; }
+.ai-pathfinder-icons { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.ai-pathfinder-shapes { gap: 8px; }
+.ai-pathfinder-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: 1px solid transparent; border-radius: 2px; background: transparent; color: var(--ai-text-primary); cursor: pointer; }
+.ai-pathfinder-icon:hover, .ai-pathfinder-icon:focus-visible { border-color: var(--ai-border-input); background: var(--ai-bg-hover); outline: none; }
+.ai-pathfinder-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-pathfinder-actions > button { flex: 1 1 auto; white-space: nowrap; }
+.ai-panel-tab[data-drop-tab], .ai-tool-btn[data-drop-tab] { position: relative; }
+.ai-panel-tab[data-drop-tab]::after, .ai-tool-btn[data-drop-tab]::after { content: ''; position: absolute; top: 0; bottom: 0; width: 3px; background: var(--ai-accent-blue); pointer-events: none; }
+.ai-panel-tab[data-drop-tab='before']::after, .ai-tool-btn[data-drop-tab='before']::after { left: 0; }
+.ai-panel-tab[data-drop-tab='after']::after, .ai-tool-btn[data-drop-tab='after']::after { right: 0; }
