@@ -424,12 +424,13 @@ export function traceImageDataToVectorNodes(
 }
 
 /**
- * High-level async helper that loads an Image VectorNode's bitmap (or synthesizes a sample bitmap
- * when offline/data-less) and traces it into editable VectorNode paths.
+ * Loads an image bitmap and traces it into editable vector paths. Loading can be cancelled;
+ * the synchronous tracing calculation itself cannot be interrupted.
  */
 export async function traceImageNodeToVectorNodes(
   imageNode: VectorNode,
-  partialOptions?: Partial<ImageTraceOptions>
+  partialOptions?: Partial<ImageTraceOptions>,
+  signal?: AbortSignal
 ): Promise<ImageTraceResult> {
   const sampleW = 96;
   const sampleH = 96;
@@ -444,7 +445,7 @@ export async function traceImageNodeToVectorNodes(
 
   if (typeof document !== 'undefined' && imageNode.imageUrl) {
     try {
-      const img = await loadHtmlImage(imageNode.imageUrl);
+      const img = await loadHtmlImage(imageNode.imageUrl, signal);
       const ratio = img.width && img.height ? img.width / img.height : 1;
       const w = ratio >= 1 ? sampleW : Math.max(16, Math.round(sampleH * ratio));
       const h = ratio >= 1 ? Math.max(16, Math.round(sampleW / ratio)) : sampleH;
@@ -457,11 +458,14 @@ export async function traceImageNodeToVectorNodes(
         const extracted = ctx.getImageData(0, 0, w, h);
         imgData = { width: w, height: h, data: extracted.data };
       }
-    } catch {
+    } catch (error) {
+      if (signal?.aborted) throw new Error('Image Trace cancelled.');
+      if (error instanceof Error && error.message.includes('timed out')) throw error;
       imgData = null;
     }
   }
 
+  if (signal?.aborted) throw new Error('Image Trace cancelled.');
   if (!imgData) {
     throw new Error('Image Trace could not load the selected image.');
   }
@@ -474,12 +478,17 @@ export async function traceImageNodeToVectorNodes(
   );
 }
 
-function loadHtmlImage(src: string): Promise<HTMLImageElement> {
+function loadHtmlImage(src: string, signal?: AbortSignal): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('Image Trace cancelled.')); return; }
     const img = new Image();
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); img.onload = null; img.onerror = null; };
+    const abort = () => { cleanup(); img.src = ''; reject(new Error('Image Trace cancelled.')); };
+    const timer = setTimeout(() => { cleanup(); img.src = ''; reject(new Error('Image Trace image loading timed out.')); }, 15000);
+    signal?.addEventListener('abort', abort, {once:true});
     img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = (err) => reject(err);
+    img.onload = () => { cleanup(); resolve(img); };
+    img.onerror = () => { cleanup(); reject(new Error('Image Trace could not load the selected image.')); };
     img.src = src;
   });
 }

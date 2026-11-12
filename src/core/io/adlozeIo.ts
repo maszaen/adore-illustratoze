@@ -92,12 +92,16 @@ export function packDocumentToAdlozeBytes(doc: StudioDocument): Uint8Array {
   archiveEntries['document.json'] = strToU8(JSON.stringify(clonedDoc, null, 2));
 
   // Generate preview.png
-  const previewDataUrl = exportDocumentToDataUrl(clonedDoc, {
+  let previewDataUrl: string;
+  try { previewDataUrl = exportDocumentToDataUrl(clonedDoc, {
     format: 'png',
     scale: 0.5,
     transparentBackground: false,
     matteColor: '#ffffff',
-  });
+  }); } catch {
+    // Internal archive preview only; the native document remains intact in headless environments.
+    previewDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  }
   archiveEntries['preview.png'] = dataUrlToUint8Array(previewDataUrl);
 
   return zipSync(archiveEntries, { level: 6 });

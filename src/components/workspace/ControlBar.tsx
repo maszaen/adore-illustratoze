@@ -31,18 +31,6 @@ const WIDTH_PROFILES = [
   { id: 'calligraphic', label: 'Width Profile 5 (Calligraphic)' },
 ];
 
-const TRACE_PRESETS = [
-  { id: 'bw-logo', label: 'Black and White Logo' },
-  { id: 'high-fidelity', label: 'High Fidelity Photo' },
-  { id: 'low-fidelity', label: 'Low Fidelity Photo' },
-  { id: '3-colors', label: '3 Colors' },
-  { id: '6-colors', label: '6 Colors' },
-  { id: '16-colors', label: '16 Colors' },
-  { id: 'grayscale', label: 'Shades of Gray' },
-  { id: 'sketched', label: 'Sketched Art' },
-  { id: 'silhouettes', label: 'Silhouettes' },
-  { id: 'line-art', label: 'Line Art' },
-];
 
 export const ControlBar: React.FC = () => {
   const store = useStudioStore() as any;
@@ -761,33 +749,7 @@ export const ControlBar: React.FC = () => {
               >
                 Image Trace
               </button>
-              <select
-                className="ai-select"
-                title="Image Trace Preset"
-                defaultValue="bw-logo"
-                onChange={() => handleOpenModal('image-trace')}
-                style={{ width: 120 }}
-              >
-                {TRACE_PRESETS.map((tp) => (
-                  <option key={tp.id} value={tp.id}>
-                    {tp.label}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="ai-btn"
-                title="Expand Traced Artwork into Editable Vector Paths"
-                onClick={() => {
-                  if (typeof store.expandImageTrace === 'function') {
-                    store.expandImageTrace();
-                  } else if (typeof store.expandAppearance === 'function') {
-                    store.expandAppearance();
-                  }
-                }}
-              >
-                Expand
-              </button>
+              <button type="button" className="ai-btn" disabled title="Live trace is not available yet; use Image Trace to create vectors.">Expand</button>
               <div className="ai-controlbar-sep" />
             </>
           )}

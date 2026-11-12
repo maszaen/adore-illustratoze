@@ -67,6 +67,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
   const [recoveryDoc, setRecoveryDoc] = useState<{
+    id: string;
     document: StudioDocument;
     savedAt: number;
   } | null>(null);
@@ -80,8 +81,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
     ]);
     setProjects(projList);
     if (recovery && recovery.dirty && recovery.document) {
-      setRecoveryDoc({ document: recovery.document, savedAt: recovery.savedAt });
-    }
+      setRecoveryDoc({ id: recovery.id, document: recovery.document, savedAt: recovery.savedAt });
+    } else setRecoveryDoc(null);
   };
 
   useEffect(() => {
@@ -483,11 +484,13 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 onClick={async () => {
-                  const docToRestore = recoveryDoc.document;
-                  if (await enterStudioWithDocument(docToRestore)) {
-                    await clearCrashRecoverySnapshot();
-                    setRecoveryDoc(null);
-                  }
+                  try {
+                    const docToRestore = recoveryDoc.document;
+                    if (await enterStudioWithDocument(docToRestore)) {
+                      await clearCrashRecoverySnapshot(recoveryDoc.id);
+                      await refreshData();
+                    }
+                  } catch { setHomeError('Recovery failed. Check browser storage and try again.'); }
                 }}
                 style={{
                   padding: '5px 12px',
@@ -503,8 +506,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onClose }) => {
               </button>
               <button
                 onClick={async () => {
-                  await clearCrashRecoverySnapshot();
-                  setRecoveryDoc(null);
+                  try { await clearCrashRecoverySnapshot(recoveryDoc.id); await refreshData(); }
+                  catch { setHomeError('Could not dismiss recovery snapshot. Check browser storage.'); }
                 }}
                 style={{
                   padding: '5px 10px',

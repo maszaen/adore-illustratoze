@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Plus,
   Copy,
@@ -25,8 +25,8 @@ import {
   ImageTraceOptions,
   ImageTracePresetId,
   getImageTracePresetOptions,
-  traceImageNodeToVectorNodes,
 } from '../../core/io/imageTrace';
+import { runImageTraceCommand } from '../../core/commands/imageTraceCommand';
 import {
   exportAssetToDataUrl,
   triggerDataUrlDownload,
@@ -98,6 +98,9 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
     colors: number;
   } | null>(null);
   const [isTracing, setIsTracing] = useState<boolean>(false);
+  const [traceError, setTraceError] = useState('');
+  const traceAbort = useRef<AbortController | null>(null);
+  useEffect(() => { setIsTracing(false); setTraceError(''); return () => { traceAbort.current?.abort(); traceAbort.current = null; }; }, [activeTab]);
 
   // Magic Wand state
   const [wandCriteria, setWandCriteria] = useState({
@@ -276,6 +279,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
   };
 
   const handleExportAllAssetsNow = () => {
+    try {
     if (exportAssets.length === 0) {
       // If no queued assets, open Export for Screens modal or export active artboard 1x PNG
       const url = exportAssetToDataUrl(
@@ -308,67 +312,26 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
         });
       });
     });
+    } catch (error) { store.setStatusMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`); }
   };
 
   // ============================================================================
   // 3. IMAGE TRACE HANDLERS
   // ============================================================================
-  const handleRunImageTrace = async (expandImmediately = false) => {
-    const targetNode =
-      primaryNode ||
-      Object.values(nodesMap)[0] || {
-        id: 'sample-img',
-        name: 'Sample Bitmap',
-        type: 'image' as const,
-        layerId: doc.activeLayerId || 'layer-1',
-        visible: true,
-        locked: false,
-        x: 120,
-        y: 120,
-        width: 240,
-        height: 240,
-        rotation: 0,
-        points: [],
-        closed: true,
-        fills: [],
-        strokes: [],
-        effects: [],
-        opacity: 1,
-        blendMode: 'normal' as const,
-      };
-
-    setIsTracing(true);
+  const handleRunImageTrace = async (replace = false) => {
+    if (traceAbort.current) return;
+    const controller = new AbortController(); traceAbort.current = controller;
+    setIsTracing(true); setTraceError('');
     try {
-      const res = await traceImageNodeToVectorNodes(targetNode, traceOpts);
-      setTraceStats({
-        paths: res.pathCount,
-        anchors: res.anchorCount,
-        colors: res.colorCount,
-      });
-
-      updateDocument((d, s) => {
-        if (!d.nodes) d.nodes = {};
-        if (expandImmediately && d.nodes[targetNode.id]) {
-          delete d.nodes[targetNode.id];
-        }
-        d.nodes[res.groupNode.id] = res.groupNode;
-        res.pathNodes.forEach((pn) => {
-          d.nodes[pn.id] = pn;
-        });
-        const layer = (d.layers || []).find((l: any) => l.id === res.groupNode.layerId);
-        if (layer && Array.isArray(layer.nodeIds)) {
-          layer.nodeIds = [
-            res.groupNode.id,
-            ...layer.nodeIds.filter((id: string) => id !== targetNode.id),
-          ];
-        }
-        s.selectedIds = [res.groupNode.id];
-        s.selectedNodeIds = [res.groupNode.id];
-      }, expandImmediately ? 'Expand Image Trace' : 'Image Trace');
+      const res = await runImageTraceCommand(traceOpts, replace ? 'replace' : 'copy', controller.signal);
+      if (!controller.signal.aborted) setTraceStats({paths:res.pathCount, anchors:res.anchorCount, colors:res.colorCount});
     } catch (error) {
-      store.setStatusMessage(error instanceof Error ? error.message : 'Image Trace failed.');
+      if (!controller.signal.aborted) {
+        const message = error instanceof Error ? error.message : 'Image Trace failed.';
+        setTraceError(message); store.setStatusMessage(message);
+      }
     } finally {
-      setIsTracing(false);
+      if (traceAbort.current === controller) { traceAbort.current = null; setIsTracing(false); }
     }
   };
 
@@ -1159,6 +1122,8 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
             </div>
           </div>
 
+          <p className="text-[10px] text-[#b0b0b0]">Trace creates a vector copy and keeps the image. Expand Vector replaces the image; undo restores it. Results are approximate.</p>
+          {traceError && <p role="alert" className="text-[10px] text-[#ff9a80]">{traceError}</p>}
           {traceStats && (
             <div className="px-2 py-1 rounded bg-[#222] text-[10px] text-[#b0b0b0] flex justify-between">
               <span>Paths: {traceStats.paths}</span>

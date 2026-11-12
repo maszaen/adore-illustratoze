@@ -15,6 +15,10 @@ describe('live external agent bridge', () => {
     useStudioStore.getState().openDocument(doc);
     const inspected=await inspectActive();
     const request={id:'one',type:'apply',documentId:doc.id,revision:inspected.revision,operations};
+    useStudioStore.getState().selectNodes([]);
+    expect((await inspectActive()).revision).toBe(inspected.revision);
+    useStudioStore.getState().selectNodes(['not-a-document-edit']);
+    expect((await inspectActive()).revision).toBe(inspected.revision);
     expect((await prepareChange(request)).svg).toContain('live-box');
     expect(useStudioStore.getState().getActiveDocument().nodes['live-box']).toBeUndefined();
     await expect(commitChange(request,()=>false)).rejects.toThrow('changed');

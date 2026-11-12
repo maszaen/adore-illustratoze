@@ -18,6 +18,7 @@ import {
   getCrashRecoverySnapshot,
   clearCrashRecoverySnapshot,
 } from './core/io/db';
+import { createAutosaveCoordinator } from './core/io/autosave';
 import { importAdlozeFile, exportDocumentAsAdlozeFile } from './core/io/adlozeIo';
 import { parseSvgStringToVectorNodes } from './core/io/svgIo';
 import { createDefaultDocument } from './core/presets/defaultPresets';
@@ -58,6 +59,7 @@ export const App: React.FC = () => {
 
   const [isDraggingFileOver, setIsDraggingFileOver] = useState(false);
   const [crashRecoveryBanner, setCrashRecoveryBanner] = useState<{
+    id: string;
     document: StudioDocument;
     savedAt: number;
   } | null>(null);
@@ -92,69 +94,34 @@ export const App: React.FC = () => {
     rootEl.setAttribute('data-pasteboard', pasteboardMatchUI ? 'match' : 'white');
   }, [uiBrightness, pasteboardMatchUI, themeClassName]);
 
-  // Startup crash recovery check & initial project persistence
+  // Each page session has its own recovery records; unresolved earlier sessions
+  // remain untouched until the user chooses Restore or Dismiss.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const snapshot = await getCrashRecoverySnapshot();
-        if (
-          !cancelled &&
-          snapshot &&
-          snapshot.dirty &&
-          snapshot.document &&
-          snapshot.document.id !== activeDocument.id
-        ) {
-          setCrashRecoveryBanner({
-            document: snapshot.document,
-            savedAt: snapshot.savedAt,
-          });
-        }
-        await saveProjectToDb(activeDocument);
-      } catch {
-        // Ignore IndexedDB error in restricted environments
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (!showHomeScreen) getCrashRecoverySnapshot().then(snapshot => {
+      if (!cancelled) setCrashRecoveryBanner(snapshot ? {id:snapshot.id, document:snapshot.document, savedAt:snapshot.savedAt} : null);
+    }).catch(() => { if (!cancelled) store.setStatusMessage('Recovery storage unavailable. Export a backup of your work.'); });
+    return () => { cancelled = true; };
+  }, [showHomeScreen]);
 
-  // Debounced background autosave to IndexedDB & crash recovery snapshot
+  const autosaveRef = useRef<ReturnType<typeof createAutosaveCoordinator> | null>(null);
+  if (!autosaveRef.current) autosaveRef.current = createAutosaveCoordinator(
+    async doc => {
+      const results = await Promise.allSettled([saveCrashRecoverySnapshot(doc, true), saveProjectToDb(doc)]);
+      if (results.some(result => result.status === 'rejected')) throw new Error('Storage write failed');
+    },
+    () => useStudioStore.getState().setStatusMessage('Autosave failed. Export a backup and check browser storage.'),
+  );
+  const firstDocument = useRef(activeDocument);
   useEffect(() => {
-    if (!activeDocument) return;
-    const timer = window.setTimeout(() => {
-      saveCrashRecoverySnapshot(activeDocument, true).catch(() => {});
-      saveProjectToDb(activeDocument).catch(() => {});
-    }, 1000);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
+    if (firstDocument.current === activeDocument) return;
+    firstDocument.current = activeDocument;
+    if (activeDocument) autosaveRef.current!.schedule(activeDocument);
   }, [activeDocument]);
-
-  // Periodic 20s autosave heartbeat + beforeunload snapshot
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      const currentDoc = useStudioStore.getState().getActiveDocument();
-      if (currentDoc) {
-        saveCrashRecoverySnapshot(currentDoc, false).catch(() => {});
-        saveProjectToDb(currentDoc).catch(() => {});
-      }
-    }, 20000);
-
-    const handleBeforeUnload = () => {
-      const currentDoc = useStudioStore.getState().getActiveDocument();
-      if (currentDoc) {
-        saveCrashRecoverySnapshot(currentDoc, false).catch(() => {});
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
+    const flush = () => autosaveRef.current?.flushAll();
+    window.addEventListener('pagehide', flush);
+    return () => { window.removeEventListener('pagehide', flush); flush(); };
   }, []);
 
   // Unified File Ingestion (.adloze, .svg, .png, .jpg, .webp)
@@ -462,10 +429,14 @@ export const App: React.FC = () => {
               className="ai-btn active"
               style={{ height: 19, padding: '0 8px', fontSize: 10 }}
               onClick={async () => {
-                const docToRestore = crashRecoveryBanner.document;
-                await clearCrashRecoverySnapshot();
-                setCrashRecoveryBanner(null);
-                store.openDocument(docToRestore);
+                try {
+                  const docToRestore = crashRecoveryBanner.document;
+                  await saveProjectToDb(docToRestore);
+                  store.openDocument(docToRestore);
+                  await clearCrashRecoverySnapshot(crashRecoveryBanner.id);
+                  const next = await getCrashRecoverySnapshot();
+                  setCrashRecoveryBanner(next ? {id:next.id, document:next.document, savedAt:next.savedAt} : null);
+                } catch { store.setStatusMessage('Recovery failed. Your recovery snapshot was not intentionally discarded; check browser storage.'); }
               }}
             >
               Restore Document
@@ -475,8 +446,11 @@ export const App: React.FC = () => {
               className="ai-btn"
               style={{ height: 19, padding: '0 8px', fontSize: 10 }}
               onClick={async () => {
-                await clearCrashRecoverySnapshot();
-                setCrashRecoveryBanner(null);
+                try {
+                  await clearCrashRecoverySnapshot(crashRecoveryBanner.id);
+                  const next = await getCrashRecoverySnapshot();
+                  setCrashRecoveryBanner(next ? {id:next.id, document:next.document, savedAt:next.savedAt} : null);
+                } catch { store.setStatusMessage('Could not dismiss recovery snapshot. Check browser storage.'); }
               }}
             >
               Dismiss

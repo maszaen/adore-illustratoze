@@ -75,13 +75,14 @@ import {
   resolveScaleMultiplier,
   triggerDataUrlDownload,
   type RasterFormat,
+  type RasterExportOptions,
 } from '../../core/io/rasterExport';
 import {
   IMAGE_TRACE_PRESETS,
   getImageTracePresetOptions,
-  traceImageNodeToVectorNodes,
   type ImageTracePresetId,
 } from '../../core/io/imageTrace';
+import { runImageTraceCommand } from '../../core/commands/imageTraceCommand';
 import { saveCustomPresetToDb, saveProjectToDb, listCustomPresetsFromDb, type CustomDocumentPreset } from '../../core/io/db';
 
 const DEFAULT_SHORTCUT_BINDINGS = [
@@ -136,6 +137,13 @@ export const StudioModals: React.FC = () => {
     store.document || store.activeDocument || createDefaultDocument();
   const selectedIds: string[] = store.selectedIds || store.selectedNodeIds || [];
 
+  const [rasterError, setRasterError] = useState('');
+  useEffect(() => { setRasterError(''); }, [activeModal]);
+  const rasterPreview = (options: Partial<RasterExportOptions>, alt: string) => {
+    try { return <img src={exportDocumentToDataUrl(doc, options)} alt={alt} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />; }
+    catch { return <span role="status">Preview unavailable; check export settings and try saving again.</span>; }
+  };
+  const exportFailure = (error: unknown) => setRasterError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!activeModal) return;
@@ -146,6 +154,7 @@ export const StudioModals: React.FC = () => {
   }, [activeModal]);
 
   const closeModal = () => {
+    traceAbort.current?.abort(); traceAbort.current = null; setTraceRunning(false);
     if (typeof store.setActiveModal === 'function') {
       store.setActiveModal(null);
     } else if (typeof store.closeModal === 'function') {
@@ -307,6 +316,10 @@ export const StudioModals: React.FC = () => {
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   // --- 11. IMAGE TRACE MODAL STATE ---
+  const [traceRunning, setTraceRunning] = useState(false);
+  const [traceError, setTraceError] = useState('');
+  const traceAbort = useRef<AbortController | null>(null);
+  useEffect(() => { if (activeModal !== 'image-trace') return; setTraceRunning(false); setTraceError(''); return () => { traceAbort.current?.abort(); traceAbort.current = null; }; }, [activeModal]);
   const [tracePreset, setTracePreset] = useState<ImageTracePresetId>('bw-logo');
   const [traceMode, setTraceMode] = useState<'color' | 'grayscale' | 'bw'>('bw');
   const [traceThreshold, setTraceThreshold] = useState(128);
@@ -1311,12 +1324,15 @@ export const StudioModals: React.FC = () => {
             </div>
           </div>
 
+          {rasterError && <p role="alert" style={{ color: '#ff9a80', padding: '0 18px' }}>{rasterError}</p>}
           <div style={modalFooterStyle}>
             <button onClick={closeModal} style={secondaryBtnStyle}>
               Cancel
             </button>
             <button
               onClick={async () => {
+                setRasterError('');
+                try {
                 const targetAbs =
                   selectedArtboardIds.length > 0
                     ? doc.artboards.filter((a) => selectedArtboardIds.includes(a.id))
@@ -1345,6 +1361,7 @@ export const StudioModals: React.FC = () => {
                   }
                 }
                 closeModal();
+                } catch (error) { exportFailure(error); }
               }}
               style={primaryBtnStyle}
             >
@@ -1393,15 +1410,7 @@ export const StudioModals: React.FC = () => {
                     overflow: 'hidden',
                   }}
                 >
-                  <img
-                    src={exportDocumentToDataUrl(doc, {
-                      format: 'png',
-                      scale: 0.4,
-                      transparentBackground: true,
-                    })}
-                    alt="Original"
-                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                  />
+                  {rasterPreview({format: 'png', scale: 0.4, transparentBackground: true}, 'Original')}
                 </div>
                 <div style={{ fontSize: 10, color: 'var(--ai-text-secondary)' }}>
                   {doc.name} • {Object.keys(doc.nodes || {}).length} vector objects
@@ -1432,17 +1441,7 @@ export const StudioModals: React.FC = () => {
                     overflow: 'hidden',
                   }}
                 >
-                  <img
-                    src={exportDocumentToDataUrl(doc, {
-                      format: webPresetFormat === 'jpg' ? 'jpg' : webPresetFormat === 'webp' ? 'webp' : 'png',
-                      scale: 0.4 * (webScalePct / 100),
-                      quality: webQuality / 100,
-                      transparentBackground: webTransparent && webPresetFormat !== 'jpg',
-                      matteColor: webMatte,
-                    })}
-                    alt="Optimized"
-                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                  />
+                  {rasterPreview({ format: webPresetFormat === 'jpg' ? 'jpg' : webPresetFormat === 'webp' ? 'webp' : 'png', scale: 0.4 * (webScalePct / 100), quality: webQuality / 100, transparentBackground: webTransparent && webPresetFormat !== 'jpg', matteColor: webMatte }, 'Optimized')}
                 </div>
                 <div style={{ fontSize: 10, color: 'var(--ai-text-secondary)' }}>
                   Scale: {webScalePct}% • Est. Size: ~{Math.max(4, Math.round((webQuality * webScalePct) / 180))} KB
@@ -1535,12 +1534,15 @@ export const StudioModals: React.FC = () => {
             </div>
           </div>
 
+          {rasterError && <p role="alert" style={{ color: '#ff9a80', padding: '0 18px' }}>{rasterError}</p>}
           <div style={modalFooterStyle}>
             <button onClick={closeModal} style={secondaryBtnStyle}>
               Cancel
             </button>
             <button
               onClick={() => {
+                setRasterError('');
+                try {
                 const fmt: RasterFormat =
                   webPresetFormat === 'jpg'
                     ? 'jpg'
@@ -1572,6 +1574,7 @@ export const StudioModals: React.FC = () => {
                   );
                 }
                 closeModal();
+                } catch (error) { exportFailure(error); }
               }}
               style={primaryBtnStyle}
             >
@@ -2992,61 +2995,31 @@ export const StudioModals: React.FC = () => {
               <span>Ignore White Background</span>
             </label>
           </div>
+          <p style={{padding:'0 18px', color:'var(--ai-text-secondary)', fontSize:11}}>Trace &amp; Expand replaces the selected image with approximate vectors. Undo restores the image.</p>
+          {traceError && <p role="alert" style={{padding:'0 18px', color:'#ff9a80'}}>{traceError}</p>}
           <div style={modalFooterStyle}>
             <button onClick={closeModal} style={secondaryBtnStyle}>
               Cancel
             </button>
             <button
+              disabled={traceRunning}
               onClick={async () => {
-                const targetNode =
-                  selectedIds.map((id) => doc.nodes[id]).find(Boolean) ||
-                  ({
-                    id: 'sample-img',
-                    name: 'Bitmap',
-                    type: 'image',
-                    layerId: doc.activeLayerId || doc.layers[0]?.id || 'layer-1',
-                    visible: true,
-                    locked: false,
-                    x: 200,
-                    y: 200,
-                    width: 260,
-                    height: 260,
-                    rotation: 0,
-                    points: [],
-                    closed: true,
-                    fills: [],
-                    strokes: [],
-                    effects: [],
-                    opacity: 1,
-                    blendMode: 'normal',
-                  } as VectorNode);
-
+                if (traceAbort.current) return;
+                const controller = new AbortController(); traceAbort.current = controller;
+                setTraceRunning(true); setTraceError('');
                 try {
-                const res = await traceImageNodeToVectorNodes(targetNode, {
-                  preset: tracePreset,
-                  mode: traceMode,
-                  threshold: traceThreshold,
-                  colors: traceColors,
-                  paths: tracePaths,
-                  corners: traceCorners,
-                  noise: traceNoise,
-                  ignoreWhite: traceIgnoreWhite,
-                });
-
-                mutateDocument((draft) => {
-                  const layer =
-                    draft.layers.find((l) => l.id === targetNode.layerId) || draft.layers[0];
-                  draft.nodes[res.groupNode.id] = res.groupNode;
-                  for (const pn of res.pathNodes) {
-                    draft.nodes[pn.id] = pn;
-                  }
-                  if (layer) {
-                    layer.nodeIds.push(res.groupNode.id);
-                  }
-                }, 'Image Trace & Expand');
-                closeModal();
+                  await runImageTraceCommand({
+                    ...getImageTracePresetOptions(tracePreset), mode:traceMode, threshold:traceThreshold,
+                    colors:traceColors, paths:tracePaths, corners:traceCorners, noise:traceNoise, ignoreWhite:traceIgnoreWhite,
+                  }, 'replace', controller.signal);
+                  if (!controller.signal.aborted) closeModal();
                 } catch (error) {
-                  store.setStatusMessage(error instanceof Error ? error.message : 'Image Trace failed.');
+                  if (!controller.signal.aborted) {
+                    const message = error instanceof Error ? error.message : 'Image Trace failed.';
+                    setTraceError(message); store.setStatusMessage(message);
+                  }
+                } finally {
+                  if (traceAbort.current === controller) { traceAbort.current = null; setTraceRunning(false); }
                 }
               }}
               style={primaryBtnStyle}

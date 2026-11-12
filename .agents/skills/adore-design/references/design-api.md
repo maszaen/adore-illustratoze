@@ -33,14 +33,24 @@ Required document fields: `name`, `width`, `height`. Optional `unit` (`px` or `p
 
 ### Operations
 
-- `layer`: required `id`, `name`; optional `color` (hex).
-- `rectangle`, `ellipse`: required `id`, `layer`, `x`, `y`, `width`, `height`; optional `name`, `fill`, `stroke`, `strokeWidth`.
-- `path`: required `id`, `layer`, `points` (2–1000 items `{x,y,handleIn?,handleOut?}`). Handles are absolute `{x,y}`. Optional `name`, `closed` (default true), `fill`, `stroke`, `strokeWidth`.
-- `text`: required `id`, `layer`, `x`, `y`, `text`, `fontSize`; optional `name`, `fontFamily`, `fontStyle` (`Regular`, `Bold`, `Italic`, `Bold Italic`), `fill`. Text is point text, not an area frame.
-- `update`: required `id` of existing node; optional `name`, `x`, `y`, `fill`, `text`, `fontSize`. Position moves geometry and handles together; only basic leaf shapes, paths and text can be moved. Text fields require text nodes. Changing fill replaces its entire fill stack; not supported for complex objects. No resize/rotate.
+All shapes, paths and text accept optional `opacity` (0–1) and `rotation` (degrees around the node's frame center). For create and update, `fill` accepts a solid `#RRGGBB`, `null` for none, or a gradient:
+
+```json
+{"type":"linear","angle":45,"stops":[{"offset":0,"color":"#112233","opacity":1},{"offset":1,"color":"#aabbcc","opacity":0.2}]}
+```
+
+Gradient type is `linear` or `radial`; angle defaults to 0 (radial is centered and ignores angle). Stops must be sorted by offset, with 2–32 stops; offset and optional opacity are 0–1. Fill changes replace the entire existing fill stack. Gradients, including text gradients, are editable in the editor. SVG preview is approximate.
+
+- `layer`: required `id`, `name`; optional `color` (hex). New layers appear on top.
+- `rectangle`, `ellipse`, `polygon`, `star`: required `id`, `layer`, `x`, `y`, `width`, `height`; optional `name`, `fill`, `stroke`, `strokeWidth`, `opacity`, `rotation`. Rectangle, polygon and star additionally accept `cornerRadius`; polygon/star accept integer `sides` (3–100; default 6/5), star accepts `innerRadius` (ratio 0.08–0.95, default 0.45).
+- `path`: required `id`, `layer`, `points` (2–1000 items `{x,y,handleIn?,handleOut?}`). Handles are absolute `{x,y}`. Optional `name`, `closed` (default true), `fill`, `stroke`, `strokeWidth`, `opacity`, `rotation`.
+- `text`: required `id`, `layer`, `x`, `y`, `text`, `fontSize`; optional `name`, `fontFamily`, `fontStyle` (`Regular`, `Bold`, `Italic`, `Bold Italic`), `fill`, `opacity`, `rotation`. Text is point text, not an area frame.
+- `update`: required existing `id`; optional `name`, `x`, `y`, `width`, `height`, `rotation`, `opacity`, `fill`, `text`, `fontSize`. Width/height resize ungrouped rectangle, ellipse, polygon, star, path or line with nonzero original width and height, scaling anchors and handles relative to the unrotated top-left; rotation is retained around the new frame center. This is not a general affine transform; stroke width and corner radii are not scaled. Rotation and position support those vector types plus text; grouped nodes and text resizing are not supported. Text fields require text nodes. Fill is supported on the listed leaf types.
 - `delete`: required `id`; only ungrouped leaf nodes, not locked objects/layers. Deleting a group is unsupported.
 
-Colors are six-digit `#RRGGBB`; shape/path fill and stroke can be `null` for none. Fill defaults black, except open paths default to no fill. Stroke defaults none; use `stroke` to make open paths visible. `strokeWidth` defaults 1. Unknown fields are rejected. Editing preserves unsupported document elements unless explicitly affected by an operation. The full batch is applied to a clone, so errors do not partially mutate the input.
+Colors are six-digit `#RRGGBB`; shape/path fill and stroke can be `null` for none. Fill defaults black, except open paths default to no fill. Stroke defaults none; `strokeWidth` defaults 1. Unknown fields are rejected. Locked layers/nodes/ancestors cannot be edited. Existing unsupported document elements remain untouched unless explicitly affected. The full batch is applied to a clone, so errors do not partially mutate the input.
+
+`inspect` includes node anchors, fills, strokes, text style, hierarchy and `bounds` in document coordinates. Bounds are editor geometry, not rendered ink or effect bounds; text frames may rely on approximate font metrics, rotated text bounds are not expanded, and group bounds may be stale. Inspect is not a screenshot or a full validation of complex objects. Large documents may exceed bridge reply limits.
 
 ## TypeScript SDK
 
