@@ -1,4 +1,5 @@
 import { blendIntermediateNodes } from '../math/blend';
+import { anchorsToSvgPath } from '../math/bezier';
 import { clipsTextToFrame, layoutText, textGlyphTransform } from '../math/textLayout';
 import type {
   AnchorPoint,
@@ -146,7 +147,7 @@ export function exportDocumentToSvgString(
     if (primaryFill) {
       fillOpacity = primaryFill.opacity ?? 1;
       if (primaryFill.type === 'gradient' && primaryFill.gradient) {
-        const gradId = `grad_${node.id.replace(/[^a-zA-Z0-9]/g, '')}`;
+        const gradId = `grad_${Array.from(node.id, c => c.codePointAt(0)!.toString(16)).join('_')}`;
         defsList.push(buildGradientSvgDef(gradId, primaryFill.gradient, fmt));
         fillValue = `url(#${gradId})`;
       } else {
@@ -260,7 +261,9 @@ export function exportDocumentToSvgString(
             },
             { id: '4', x: node.x, y: node.y + node.height, pointType: 'corner' as const },
           ];
-    const d = anchorPointsToSvgPathD(pts, node.closed !== false && node.type !== 'line', fmt);
+    const closed = node.closed !== false && node.type !== 'line';
+    const hasLiveCorners = pts.some(p => (p.cornerRadius ?? node.cornerRadius ?? 0) > 0);
+    const d = hasLiveCorners ? anchorsToSvgPath(pts, closed, node.cornerRadius, node.cornerType) : anchorPointsToSvgPathD(pts, closed, fmt);
     return `${indent}<path id="${elemId}" d="${d}"${transformAttr}${styleAttributeStr}/>`;
   };
 
@@ -504,8 +507,8 @@ export function parseSvgStringToVectorNodes(
 
         walkChildren(svgRoot, undefined);
       }
-    } catch {
-      // Fallback to regex parser if DOMParser fails
+    } catch (error) {
+      throw new Error(`SVG import failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -795,8 +798,16 @@ export function parseSvgPathDToAnchorPoints(d: string): {
   let closed = false;
   if (!d || !d.trim()) return { points, closed };
 
-  const tokens = d.match(/[a-df-zA-DF-Z]|[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/g);
-  if (!tokens) return { points, closed };
+  if (d.length > 5_000_000) throw new Error('SVG path is too large');
+  const tokenPattern = /[a-df-zA-DF-Z]|[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/g;
+  const tokens: string[] = []; let previousEnd = 0;
+  for (const match of d.matchAll(tokenPattern)) {
+    if (!/^[\s,]*$/.test(d.slice(previousEnd, match.index))) throw new Error('Invalid SVG path syntax');
+    tokens.push(match[0]); previousEnd = match.index! + match[0].length;
+    if (tokens.length > 1_000_000) throw new Error('SVG path has too many tokens');
+  }
+  if (!/^[\s,]*$/.test(d.slice(previousEnd)) || !tokens.length) throw new Error('Invalid SVG path syntax');
+  if (tokens[0] !== 'M' && tokens[0] !== 'm') throw new Error('SVG path must start with move');
 
   let i = 0;
   let cmd = 'M';
@@ -807,8 +818,14 @@ export function parseSvgPathDToAnchorPoints(d: string): {
   let lastControlX = 0;
   let lastControlY = 0;
 
-  const nextNum = (): number => parseFloat(tokens[i++] || '0') || 0;
   const isCmdToken = (t: string | undefined): boolean => Boolean(t && /^[a-df-zA-DF-Z]$/.test(t));
+  const nextNum = (): number => {
+    const token = tokens[i];
+    if (token === undefined || isCmdToken(token)) throw new Error('SVG path has missing coordinates');
+    const value = Number(token);
+    if (!Number.isFinite(value)) throw new Error('SVG path coordinate must be finite');
+    i++; return value;
+  };
 
   while (i < tokens.length) {
     if (isCmdToken(tokens[i])) {
@@ -1022,11 +1039,11 @@ export function parseSvgPathDToAnchorPoints(d: string): {
         closed = true;
         cx = startX;
         cy = startY;
+        cmd = '';
         break;
       }
       default: {
-        i++;
-        break;
+        throw new Error('Invalid or unsupported SVG path command');
       }
     }
   }

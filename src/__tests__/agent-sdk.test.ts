@@ -40,3 +40,51 @@ describe('external agent SDK', () => {
     const doc=make(); doc.layers[0].nodeIds.push('missing'); expect(()=>validateDocument(doc)).toThrow('invalid node');
   });
 });
+
+describe('agent authoring improvements', () => {
+  const gradient = {type:'linear',angle:45,stops:[{offset:0,color:'#112233',opacity:0.25},{offset:1,color:'#abcdef'}]};
+  it('creates editable gradients, opacity and parametric shapes, and roundtrips their previews', () => {
+    const doc=applyOperations(make(),[
+      {op:'rectangle',id:'round',layer:'artwork',x:10,y:20,width:100,height:60,cornerRadius:12,fill:gradient,opacity:0.6,rotation:30},
+      {op:'polygon',id:'poly',layer:'artwork',x:0,y:0,width:80,height:80,sides:6,fill:{...gradient,type:'radial'}},
+      {op:'star',id:'star',layer:'artwork',x:0,y:0,width:100,height:80,sides:5,innerRadius:0.4,cornerRadius:3},
+    ]);
+    const loaded=readDesign(writeDesign(doc));
+    expect(loaded.nodes.round.fills[0].gradient?.stops[0].opacity).toBe(0.25);
+    expect(loaded.nodes.round.points[0].cornerRadius).toBe(12);
+    expect(loaded.nodes.poly.points).toHaveLength(6); expect(loaded.nodes.star.points).toHaveLength(10);
+    const svg=previewDesign(loaded); expect(svg).toContain('<linearGradient'); expect(svg).toContain('<radialGradient'); expect(svg).toContain('stop-opacity="0.25"'); expect(svg).toContain('rotate(30'); expect(svg).toContain('opacity="0.6"');
+    const roundedPath=svg.match(/<path id="round"[^>]*>/)?.[0]; expect(roundedPath).toMatch(/[QC]/);
+    const summary=inspectDesign(loaded).nodes.find(n=>n.id==='round')!;
+    expect(summary.fills[0].gradient?.type).toBe('linear'); expect(summary.bounds.width).toBeGreaterThan(0);
+    summary.fills[0].gradient!.stops[0].color='#ffffff'; expect(loaded.nodes.round.fills[0].gradient!.stops[0].color).toBe('#112233');
+  });
+  it('moves, resizes and rotates editable vectors without losing handles or styles', () => {
+    const doc=make();
+    const changed=applyOperations(doc,[{op:'update',id:'curve',x:20,y:60,width:180,height:100,rotation:45,opacity:0.4,fill:gradient}]);
+    const n=changed.nodes.curve;
+    expect(n.points[0].x).toBe(20); expect(n.points[0].y).toBe(160); expect(n.points[0].handleOut).toEqual({x:40,y:60});
+    expect(n.width).toBe(180); expect(n.height).toBe(100); expect(n.rotation).toBe(45); expect(n.opacity).toBe(0.4);
+    expect(n.strokes[0].color).toBe('#123456'); expect(doc.nodes.curve.rotation).toBe(0);
+    expect(inspectDesign(changed).nodes.find(n=>n.id==='curve')?.points[0].handleOut).toEqual({x:40,y:60});
+  });
+  it('rejects invalid styles and unsupported resizes atomically', () => {
+    const doc=make(), before=structuredClone(doc);
+    for (const op of [
+      {op:'update',id:'bg',opacity:2},
+      {op:'update',id:'title',width:10},
+      {op:'update',id:'bg',fill:{...gradient,stops:[{offset:0.9,color:'#000000'},{offset:0.2,color:'#ffffff'}]}},
+      {op:'update',id:'bg',fill:{...gradient,type:'freeform'}},
+      {op:'star',id:'bad',layer:'artwork',x:0,y:0,width:10,height:10,sides:3.5},
+    ]) expect(()=>applyOperations(doc,[{op:'update',id:'bg',x:20},op])).toThrow();
+    expect(doc).toEqual(before);
+  });
+  it('uses distinct SVG gradient IDs even when object IDs differ only by punctuation', () => {
+    const doc=applyOperations(make(),[
+      {op:'rectangle',id:'a-b',layer:'artwork',x:0,y:0,width:10,height:10,fill:gradient},
+      {op:'rectangle',id:'ab',layer:'artwork',x:20,y:0,width:10,height:10,fill:{...gradient,type:'radial'}},
+    ]);
+    const svg=previewDesign(doc); const ids=[...svg.matchAll(/<(?:linear|radial)Gradient id="([^"]+)"/g)].map(m=>m[1]);
+    expect(new Set(ids).size).toBe(ids.length); expect(ids).toHaveLength(2);
+  });
+});

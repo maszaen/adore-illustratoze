@@ -119,31 +119,29 @@ export function generateDocumentThumbnailDataUrl(doc: StudioDocument): string {
 
 const THUMBNAIL_VERSION = 2;
 
-export async function saveProjectToDb(
-  doc: StudioDocument,
-  thumbnailDataUrl?: string
-): Promise<StoredProjectRecord> {
-  const now = Date.now();
-  const primaryAb = doc.artboards?.[0];
-  const existing = await studioDb.projects.get(doc.id).catch(() => undefined);
-
-  const record: StoredProjectRecord = {
-    id: doc.id,
-    name: doc.name || 'Untitled-1',
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-    width: primaryAb?.width ?? 1920,
-    height: primaryAb?.height ?? 1080,
-    unit: doc.unit || 'px',
-    colorMode: doc.colorMode || 'RGB',
-    artboardCount: doc.artboards?.length || 1,
-    thumbnailDataUrl: thumbnailDataUrl || generateDocumentThumbnailDataUrl(doc),
-    thumbnailVersion: thumbnailDataUrl ? undefined : THUMBNAIL_VERSION,
-    document: JSON.parse(JSON.stringify(doc)),
-  };
-
-  await studioDb.projects.put(record);
-  return record;
+// Serialize same-document writes in this page and capture the snapshot before any await.
+const projectWrites = new Map<string, Promise<unknown>>();
+export function saveProjectToDb(doc: StudioDocument, thumbnailDataUrl?: string): Promise<StoredProjectRecord> {
+  const snapshot: StudioDocument = JSON.parse(JSON.stringify(doc));
+  const previous = projectWrites.get(snapshot.id) ?? Promise.resolve();
+  const write = previous.catch(() => {}).then(async () => {
+    const now = Date.now();
+    const primaryAb = snapshot.artboards?.[0];
+    const existing = await studioDb.projects.get(snapshot.id);
+    const record: StoredProjectRecord = {
+      id: snapshot.id, name: snapshot.name || 'Untitled-1', createdAt: existing?.createdAt ?? now,
+      updatedAt: now, width: primaryAb?.width ?? 1920, height: primaryAb?.height ?? 1080,
+      unit: snapshot.unit || 'px', colorMode: snapshot.colorMode || 'RGB',
+      artboardCount: snapshot.artboards?.length || 1,
+      thumbnailDataUrl: thumbnailDataUrl || generateDocumentThumbnailDataUrl(snapshot),
+      thumbnailVersion: thumbnailDataUrl ? undefined : THUMBNAIL_VERSION, document: snapshot,
+    };
+    await studioDb.projects.put(record);
+    return record;
+  });
+  projectWrites.set(snapshot.id, write);
+  void write.finally(() => { if (projectWrites.get(snapshot.id) === write) projectWrites.delete(snapshot.id); }).catch(() => {});
+  return write;
 }
 
 export async function listProjectsFromDb(): Promise<StoredProjectRecord[]> {
@@ -202,33 +200,30 @@ export async function duplicateProjectInDb(id: string): Promise<StoredProjectRec
   return copyRecord;
 }
 
-export async function saveCrashRecoverySnapshot(doc: StudioDocument, dirty = true): Promise<void> {
-  try {
-    await studioDb.recovery.put({
-      id: 'latest_session',
-      document: JSON.parse(JSON.stringify(doc)),
-      savedAt: Date.now(),
-      dirty,
-    });
-  } catch {
-    // Ignore storage quota or private mode issues
-  }
+// A fresh page session writes only its own records, so an unresolved earlier
+// recovery snapshot cannot be overwritten by startup or another open tab.
+const recoverySession = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const recoveryPrefix = `session:${recoverySession}:`;
+const recoveryWrites = new Map<string, Promise<void>>();
+export function saveCrashRecoverySnapshot(doc: StudioDocument, dirty = true): Promise<void> {
+  const snapshot: StudioDocument = JSON.parse(JSON.stringify(doc));
+  const key = recoveryPrefix + snapshot.id;
+  const previous = recoveryWrites.get(key) ?? Promise.resolve();
+  const write = previous.catch(() => {}).then(() => studioDb.recovery.put({ id:key, document:snapshot, savedAt:Date.now(), dirty }).then(() => {}));
+  recoveryWrites.set(key, write);
+  void write.finally(() => { if (recoveryWrites.get(key) === write) recoveryWrites.delete(key); }).catch(() => {});
+  return write;
 }
 
 export async function getCrashRecoverySnapshot(): Promise<CrashRecoveryRecord | undefined> {
-  try {
-    return await studioDb.recovery.get('latest_session');
-  } catch {
-    return undefined;
-  }
+  const records = await studioDb.recovery.orderBy('savedAt').reverse().toArray();
+  return records.find(record => record.dirty && !record.id.startsWith(recoveryPrefix));
 }
 
-export async function clearCrashRecoverySnapshot(): Promise<void> {
-  try {
-    await studioDb.recovery.delete('latest_session');
-  } catch {
-    // Ignore
-  }
+/** Delete only the snapshot the user actually chose; never clear another session's newer record. */
+export async function clearCrashRecoverySnapshot(id?: string): Promise<void> {
+  const key = id ?? (await getCrashRecoverySnapshot())?.id;
+  if (key) await studioDb.recovery.delete(key);
 }
 
 export async function saveCustomPresetToDb(preset: CustomDocumentPreset): Promise<void> {

@@ -113,7 +113,7 @@ export function renderDocumentToCanvas(
   canvas.height = pixelH;
 
   const ctx = canvas.getContext('2d');
-  if (!ctx) return canvas;
+  if (!ctx) throw new Error('Raster export failed: canvas is unavailable.');
 
   ctx.save();
   ctx.scale(scale, scale);
@@ -334,17 +334,13 @@ export function exportDocumentToDataUrl(
     ...DEFAULT_RASTER_EXPORT_OPTIONS,
     ...partialOptions,
   };
-  try {
-    const canvas = renderDocumentToCanvas(doc, opts);
-    const mime = getMimeTypeForFormat(opts.format);
-    const dataUrl = canvas.toDataURL(mime, opts.quality);
-    if (dataUrl && dataUrl.startsWith('data:image/')) {
-      return dataUrl;
-    }
-  } catch {
-    // Fallback for headless test environments without canvas implementation
+  const canvas = renderDocumentToCanvas(doc, opts);
+  const mime = getMimeTypeForFormat(opts.format);
+  const dataUrl = canvas.toDataURL(mime, opts.quality);
+  if (!dataUrl.startsWith(`data:${mime};base64,`) || dataUrl.length <= `data:${mime};base64,`.length) {
+    throw new Error(`Raster export failed: ${mime} encoding is unavailable or returned no data.`);
   }
-  return `data:${getMimeTypeForFormat(opts.format)};base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==`;
+  return dataUrl;
 }
 
 export async function exportDocumentToBlob(
@@ -358,22 +354,12 @@ export async function exportDocumentToBlob(
   const canvas = renderDocumentToCanvas(doc, opts);
   const mime = getMimeTypeForFormat(opts.format);
 
-  return new Promise<Blob>((resolve) => {
-    if (typeof canvas.toBlob === 'function') {
-      canvas.toBlob(
-        (blob) => {
-          if (blob) {
-            resolve(blob);
-          } else {
-            resolve(new Blob([''], { type: mime }));
-          }
-        },
-        mime,
-        opts.quality
-      );
-    } else {
-      resolve(new Blob([''], { type: mime }));
-    }
+  return new Promise<Blob>((resolve, reject) => {
+    if (typeof canvas.toBlob !== 'function') { reject(new Error('Raster export failed: Blob encoding is unavailable.')); return; }
+    canvas.toBlob((blob) => {
+      if (!blob || blob.size === 0 || blob.type !== mime) reject(new Error(`Raster export failed: ${mime} encoding returned no data or an unsupported format.`));
+      else resolve(blob);
+    }, mime, opts.quality);
   });
 }
 

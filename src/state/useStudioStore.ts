@@ -217,7 +217,7 @@ export interface StudioStoreState {
   updateDocument: (
     updater: (doc: StudioDocument, state?: StudioStoreState) => void,
     historyLabel?: string,
-    options?: { silent?: boolean }
+    options?: { silent?: boolean; coalesce?: boolean }
   ) => void;
 
   // History Actions
@@ -742,6 +742,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
     const lastEntry = s.history[s.historyIndex];
     // Smart rapid-fire coalescing for sliders / color pickers within 350ms
     if (
+      options?.coalesce !== false &&
       lastEntry &&
       s.historyIndex === s.history.length - 1 &&
       lastEntry.label === historyLabel &&

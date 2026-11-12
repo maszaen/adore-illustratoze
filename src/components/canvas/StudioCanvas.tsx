@@ -2048,7 +2048,7 @@ export const StudioCanvas: React.FC = () => {
                 {(g.stops || []).map((st) => (
                   <stop
                     key={st.id}
-                    offset={`${Math.round(st.offset * 100)}%`}
+                    offset={`${st.offset * 100}%`}
                     stopColor={st.color}
                     stopOpacity={st.opacity}
                   />
@@ -2073,7 +2073,7 @@ export const StudioCanvas: React.FC = () => {
                 {(g.stops || []).map((st) => (
                   <stop
                     key={st.id}
-                    offset={`${Math.round(st.offset * 100)}%`}
+                    offset={`${st.offset * 100}%`}
                     stopColor={st.color}
                     stopOpacity={st.opacity}
                   />
@@ -2468,7 +2468,7 @@ export const StudioCanvas: React.FC = () => {
       const { fontSize, lines } = layout;
       const glyph = textGlyphTransform(node);
       const fillItem = node.fills?.find((f) => f.visible && f.type !== 'none');
-      const fillHex = fillItem ? resolveFillOrStrokeColor(fillItem.color || '#000000', fillItem.globalSwatchId, fillItem.tint) : 'none';
+      const fillHex = fillItem?.type === 'gradient' && fillItem.gradient ? `url(#grad-${node.id}-${fillItem.id})` : fillItem ? resolveFillOrStrokeColor(fillItem.color || '#000000', fillItem.globalSwatchId, fillItem.tint) : 'none';
       const strokeItem = node.strokes?.find((s) => s.visible && s.weight > 0);
 
       return (
