@@ -32,14 +32,46 @@ describe('home and panel forms', () => {
     expect(host.querySelector('[aria-label="Search projects"]')).not.toBeNull();
     act(()=>root.unmount());host.remove();
   });
-  it('opens preset cards by keyboard', async () => {
+  it('clips the project thumbnail corners without clipping its action menu', async () => {
+    const { listProjectsFromDb } = await import('../core/io/db');
+    const doc = createDefaultDocument({ id: 'thumb-project', includeSampleArtwork: false });
+    vi.mocked(listProjectsFromDb).mockResolvedValueOnce([{ id: doc.id, name: doc.name, createdAt: 1, updatedAt: 1, width: 1200, height: 800, unit: 'px', colorMode: 'RGB', artboardCount: 1, document: doc, thumbnailDataUrl: 'data:image/svg+xml,test' }]);
     const { HomeDashboard } = await import('../components/home/HomeDashboard');
-    const { saveProjectToDb } = await import('../core/io/db');
+    const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+    await act(async () => root.render(<HomeDashboard />));
+    const preview = host.querySelector<HTMLElement>(`[aria-label="Open ${doc.name}"]`)!;
+    expect(preview.style.overflow).toBe('hidden');
+    expect(preview.style.borderTopRightRadius).toBe('7px');
+    expect(preview.style.borderTopLeftRadius).toBe('7px');
+    expect(preview.parentElement!.style.overflow).toBe('visible');
+    act(() => host.querySelector<HTMLButtonElement>(`[aria-label="Actions for ${doc.name}"]`)!.click());
+    expect(host.textContent).toContain('Duplicate');
+    act(() => root.unmount()); host.remove();
+  });
+  it('opens document creation from the sidebar without a duplicate preset section', async () => {
+    const { HomeDashboard } = await import('../components/home/HomeDashboard');
     const host=document.createElement('div');document.body.appendChild(host);const root=createRoot(host);
     await act(async()=>root.render(<HomeDashboard/>));
-    const card=host.querySelector<HTMLElement>('.ai-home-presets [role="button"]')!;
-    await act(async()=>card.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})));
-    expect(saveProjectToDb).toHaveBeenCalled(); expect(useStudioStore.getState().showHomeScreen).toBe(false);
+    expect(host.querySelector('.ai-home-presets')).toBeNull();
+    const create=host.querySelector<HTMLButtonElement>('.ai-home-primary')!;
+    act(()=>create.click());
+    expect(useStudioStore.getState().activeModal).toBe('new-document');
+    act(()=>root.unmount());host.remove();
+  });
+  it('shows real template previews and opens an editable poster', async () => {
+    const { HomeDashboard } = await import('../components/home/HomeDashboard');
+    const host=document.createElement('div'); document.body.appendChild(host); const root=createRoot(host);
+    await act(async()=>root.render(<HomeDashboard/>));
+    const previews = Array.from(host.querySelectorAll<HTMLImageElement>('.ai-home-template-preview'));
+    expect(previews).toHaveLength(4);
+    expect(new Set(previews.map(image => image.src)).size).toBe(4);
+    expect(decodeURIComponent(previews[1].src)).toContain('Cube_top');
+    const poster = previews[1].closest<HTMLElement>('[role="button"]')!;
+    await act(async()=>poster.click());
+    const doc = useStudioStore.getState().getActiveDocument();
+    expect(doc.name).toBe('Isometric-Poster-Art.adloze');
+    expect(Object.values(doc.nodes).some(node => node.name === 'Cube top')).toBe(true);
+    expect(useStudioStore.getState().showHomeScreen).toBe(false);
     act(()=>root.unmount());host.remove();
   });
   it('labels and aligns artboard controls and keeps orientation changes functional', async () => {

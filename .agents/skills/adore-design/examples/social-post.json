@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "document": { "name": "Kopi Pagi", "width": 1080, "height": 1080, "unit": "px", "colorMode": "RGB" },
+  "operations": [
+    { "op": "rectangle", "id": "background", "layer": "artwork", "name": "Cream background", "x": 0, "y": 0, "width": 1080, "height": 1080, "fill": "#F4EBDC" },
+    { "op": "layer", "id": "illustration", "name": "Coffee illustration", "color": "#C4714D" },
+    { "op": "ellipse", "id": "sun", "layer": "illustration", "x": 555, "y": 280, "width": 360, "height": 360, "fill": "#DFAF80" },
+    { "op": "path", "id": "cup", "layer": "illustration", "name": "Coffee cup", "points": [{"x":590,"y":470},{"x":890,"y":470},{"x":845,"y":700},{"x":635,"y":700}], "fill": "#603D30" },
+    { "op": "ellipse", "id": "saucer", "layer": "illustration", "x": 600, "y": 705, "width": 280, "height": 35, "fill": "#603D30" },
+    { "op": "layer", "id": "typography", "name": "Typography", "color": "#499B93" },
+    { "op": "text", "id": "eyebrow", "layer": "typography", "x": 90, "y": 130, "text": "MULAI DENGAN", "fontSize": 26, "fontStyle": "Bold", "fill": "#A96748" },
+    { "op": "text", "id": "headline", "layer": "typography", "x": 90, "y": 220, "text": "Kopi\nPagi.", "fontSize": 112, "fontStyle": "Bold", "fill": "#34251F" },
+    { "op": "text", "id": "subtitle", "layer": "typography", "x": 95, "y": 600, "text": "Seduh pelan,\nnikmati harimu.", "fontSize": 32, "fill": "#67493C" },
+    { "op": "text", "id": "footer", "layer": "typography", "x": 95, "y": 935, "text": "KOPI PAGI  /  EST. 2026", "fontSize": 22, "fontStyle": "Bold", "fill": "#A96748" }
+  ]
+}

@@ -1,5 +1,8 @@
 import Dexie, { type Table } from 'dexie';
-import type { StudioDocument, ColorMode, VectorNode } from '../types';
+import type { StudioDocument, ColorMode, VectorNode, BoundingBox } from '../types';
+import { exportDocumentToSvgString } from './svgIo';
+import { canReflectVector, selectionNodeBounds } from '../math/selectionResize';
+import { pointTextPaintBounds } from '../math/textLayout';
 import type { UnitType } from '../math/units';
 
 export interface StoredProjectRecord {
@@ -13,6 +16,7 @@ export interface StoredProjectRecord {
   colorMode: ColorMode;
   artboardCount: number;
   thumbnailDataUrl?: string;
+  thumbnailVersion?: number;
   document: StudioDocument;
 }
 
@@ -58,135 +62,62 @@ class AdoreIllustratozeDB extends Dexie {
 
 export const studioDb = new AdoreIllustratozeDB();
 
-/**
- * Generates an SVG data URL thumbnail preview for a StudioDocument so the Home Dashboard
- * can display crisp miniature previews of projects.
- */
+/** Visible artwork and all artboards contribute to the workspace preview bounds. */
+export function documentThumbnailBounds(doc: StudioDocument): BoundingBox {
+  const boxes: BoundingBox[] = [];
+  const add = (box: BoundingBox, margin = 0) => {
+    if (![box.x, box.y, box.width, box.height, margin].every(Number.isFinite)) return;
+    boxes.push({ x: box.x - margin, y: box.y - margin, width: Math.max(0, box.width) + margin * 2, height: Math.max(0, box.height) + margin * 2 });
+  };
+  for (const board of doc.artboards || []) add(board);
+  const nodes = doc.nodes || {};
+  const seen = new Set<string>();
+  const walk = (node: VectorNode | undefined) => {
+    if (!node || seen.has(node.id) || !node.visible || node.isGuide) return;
+    seen.add(node.id);
+    if (node.children?.length && ['group', 'clipping-group', 'compound-shape', 'live-paint-group', 'blend'].includes(node.type)) {
+      // Traverse the actual children instead of trusting a potentially stale group frame.
+      node.children.forEach(id => walk(nodes[id]));
+      return;
+    }
+    let box: BoundingBox;
+    if (node.type === 'text' && node.textStyle?.typeMode === 'point') box = pointTextPaintBounds(node);
+    else if (node.rotation && !canReflectVector(node)) {
+      const cx = node.x + node.width / 2, cy = node.y + node.height / 2;
+      const radians = node.rotation * Math.PI / 180, c = Math.cos(radians), s = Math.sin(radians);
+      const points = [[node.x,node.y], [node.x+node.width,node.y], [node.x,node.y+node.height], [node.x+node.width,node.y+node.height]].map(([x,y]) => ({ x: cx+(x-cx)*c-(y-cy)*s, y: cy+(x-cx)*s+(y-cy)*c }));
+      const x = Math.min(...points.map(p => p.x)), y = Math.min(...points.map(p => p.y));
+      box = { x, y, width: Math.max(...points.map(p => p.x))-x, height: Math.max(...points.map(p => p.y))-y };
+    } else box = selectionNodeBounds(node);
+    const stroke = Math.max(0, ...(node.strokes || []).filter(item => item.visible).map(item => item.weight || 0)) / 2;
+    add(box, stroke);
+  };
+  for (const layer of doc.layers || []) {
+    if (!layer.visible) continue;
+    for (const id of layer.nodeIds || []) {
+      const node = nodes[id];
+      if (node && !node.parentId) walk(node);
+    }
+  }
+  if (!boxes.length) return { x: 0, y: 0, width: 800, height: 600 };
+  const x = Math.min(...boxes.map(b => b.x)), y = Math.min(...boxes.map(b => b.y));
+  const right = Math.max(...boxes.map(b => b.x + b.width)), bottom = Math.max(...boxes.map(b => b.y + b.height));
+  const width = Math.max(1, right - x), height = Math.max(1, bottom - y);
+  const padding = Math.max(width, height) * 0.03;
+  return { x: x - padding, y: y - padding, width: width + 2 * padding, height: height + 2 * padding };
+}
+
+/** A small SVG workspace snapshot, rendered from the same scene data as export. */
 export function generateDocumentThumbnailDataUrl(doc: StudioDocument): string {
   try {
-    const ab = doc.artboards?.[0] ?? {
-      id: 'ab-1',
-      name: 'Artboard 1',
-      x: 0,
-      y: 0,
-      width: 800,
-      height: 600,
-    };
-    const w = Math.max(1, ab.width || 800);
-    const h = Math.max(1, ab.height || 600);
-    const shapes: string[] = [];
-
-    const nodesMap: Record<string, VectorNode> = doc.nodes || {};
-    const orderedNodes: VectorNode[] = [];
-
-    for (const layer of doc.layers || []) {
-      if (layer.visible === false) continue;
-      for (const nid of layer.nodeIds || []) {
-        const n = nodesMap[nid];
-        if (n && n.visible !== false) orderedNodes.push(n);
-      }
-    }
-    if (orderedNodes.length === 0) {
-      for (const n of Object.values(nodesMap)) {
-        if (n && n.visible !== false && !n.parentId && !(doc.layers || []).some(layer => layer.nodeIds?.includes(n.id))) orderedNodes.push(n);
-      }
-    }
-
-    for (const node of orderedNodes) {
-      if (node.isGuide) continue;
-      const fillItem = node.fills?.find((f) => f.visible !== false && f.type !== 'none');
-      const strokeItem = node.strokes?.find((s) => s.visible !== false);
-      const fill = fillItem?.color || (node.type === 'line' ? 'none' : '#1473e6');
-      const stroke = strokeItem?.color || 'none';
-      const sw = strokeItem?.weight ?? 1;
-      const opacity = node.opacity ?? 1;
-
-      if (node.type === 'ellipse') {
-        const cx = node.x + node.width / 2;
-        const cy = node.y + node.height / 2;
-        shapes.push(
-          `<ellipse cx="${cx}" cy="${cy}" rx="${Math.max(1, node.width / 2)}" ry="${Math.max(1, node.height / 2)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" opacity="${opacity}" />`
-        );
-      } else if (node.type === 'text' && node.textContent) {
-        const fs = node.textStyle?.fontSize || 24;
-        const safeText = node.textContent
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;');
-        shapes.push(
-          `<text x="${node.x}" y="${node.y + fs}" font-family="${node.textStyle?.fontFamily || 'Inter, sans-serif'}" font-size="${fs}" fill="${fill}" opacity="${opacity}">${safeText}</text>`
-        );
-      } else if (node.points && node.points.length > 1) {
-        const d = buildMiniPathD(node.points, Boolean(node.closed));
-        shapes.push(
-          `<path d="${d}" fill="${node.closed ? fill : 'none'}" fill-rule="${node.fillRule || 'nonzero'}" stroke="${stroke !== 'none' ? stroke : fill}" stroke-width="${sw}" opacity="${opacity}" />`
-        );
-      } else {
-        const rx = node.cornerRadius ?? 0;
-        shapes.push(
-          `<rect x="${node.x}" y="${node.y}" width="${Math.max(1, node.width)}" height="${Math.max(1, node.height)}" rx="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" opacity="${opacity}" />`
-        );
-      }
-    }
-
-    const bg = ab.backgroundColor || '#ffffff';
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ab.x} ${ab.y} ${w} ${h}" width="320" height="220">
-      <rect x="${ab.x}" y="${ab.y}" width="${w}" height="${h}" fill="${bg}" />
-      ${shapes.join('\n')}
-    </svg>`;
+    const svg = exportDocumentToSvgString(doc, { workspaceViewBox: documentThumbnailBounds(doc), responsive: true });
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   } catch {
     return '';
   }
 }
 
-function buildMiniPathD(
-  points: Array<{
-    x: number;
-    y: number;
-    moveTo?: boolean;
-    handleIn?: { x: number; y: number };
-    handleOut?: { x: number; y: number };
-  }>,
-  closed: boolean
-): string {
-  if (!points.length) return '';
-  if (points.slice(1).some(point => point.moveTo)) {
-    const contours: typeof points[] = [];
-    for (const point of points) {
-      if (!contours.length || point.moveTo) contours.push([]);
-      contours[contours.length - 1].push(point);
-    }
-    return contours.map(contour => buildMiniPathD(contour.map(point => ({ ...point, moveTo: false })), closed)).join(' ');
-  }
-  const parts: string[] = [`M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`];
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1];
-    const curr = points[i];
-    const c1 = prev.handleOut ?? prev;
-    const c2 = curr.handleIn ?? curr;
-    if (prev.handleOut || curr.handleIn) {
-      parts.push(
-        `C ${c1.x.toFixed(1)} ${c1.y.toFixed(1)}, ${c2.x.toFixed(1)} ${c2.y.toFixed(1)}, ${curr.x.toFixed(1)} ${curr.y.toFixed(1)}`
-      );
-    } else {
-      parts.push(`L ${curr.x.toFixed(1)} ${curr.y.toFixed(1)}`);
-    }
-  }
-  if (closed && points.length > 1) {
-    const prev = points[points.length - 1];
-    const curr = points[0];
-    if (prev.handleOut || curr.handleIn) {
-      const c1 = prev.handleOut ?? prev;
-      const c2 = curr.handleIn ?? curr;
-      parts.push(
-        `C ${c1.x.toFixed(1)} ${c1.y.toFixed(1)}, ${c2.x.toFixed(1)} ${c2.y.toFixed(1)}, ${curr.x.toFixed(1)} ${curr.y.toFixed(1)}`
-      );
-    }
-    parts.push('Z');
-  }
-  return parts.join(' ');
-}
+const THUMBNAIL_VERSION = 2;
 
 export async function saveProjectToDb(
   doc: StudioDocument,
@@ -207,6 +138,7 @@ export async function saveProjectToDb(
     colorMode: doc.colorMode || 'RGB',
     artboardCount: doc.artboards?.length || 1,
     thumbnailDataUrl: thumbnailDataUrl || generateDocumentThumbnailDataUrl(doc),
+    thumbnailVersion: thumbnailDataUrl ? undefined : THUMBNAIL_VERSION,
     document: JSON.parse(JSON.stringify(doc)),
   };
 
@@ -216,7 +148,11 @@ export async function saveProjectToDb(
 
 export async function listProjectsFromDb(): Promise<StoredProjectRecord[]> {
   try {
-    return await studioDb.projects.orderBy('updatedAt').reverse().toArray();
+    const projects = await studioDb.projects.orderBy('updatedAt').reverse().toArray();
+    // Upgrade legacy one-artboard previews in memory without overwriting newer saves.
+    return projects.map(project => project.thumbnailVersion === THUMBNAIL_VERSION ? project : {
+      ...project, thumbnailDataUrl: generateDocumentThumbnailDataUrl(project.document), thumbnailVersion: THUMBNAIL_VERSION,
+    });
   } catch {
     return [];
   }

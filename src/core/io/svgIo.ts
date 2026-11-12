@@ -24,6 +24,8 @@ export interface SvgExportOptions {
   artboardId?: string;
   onlyNodeIds?: string[];
   includeBackground?: boolean;
+  /** Workspace preview: render all artboards and use the supplied scene bounds. */
+  workspaceViewBox?: { x: number; y: number; width: number; height: number };
 }
 
 export const DEFAULT_SVG_EXPORT_OPTIONS: SvgExportOptions = {
@@ -263,7 +265,8 @@ export function exportDocumentToSvgString(
   };
 
   const layerBlocks: string[] = [];
-  for (const layer of doc.layers || []) {
+  // The layer list is top-to-bottom; SVG elements are painted bottom-to-top.
+  for (const layer of [...(doc.layers || [])].reverse()) {
     if (!layer.visible) continue;
     const layerChildren: string[] = [];
     for (const nid of layer.nodeIds || []) {
@@ -295,16 +298,18 @@ export function exportDocumentToSvgString(
 
   const defsSection =
     defsList.length > 0 ? `  <defs>\n    ${defsList.join('\n    ')}\n  </defs>\n` : '';
-  const bgRect =
-    opts.includeBackground || ab.backgroundColor
-      ? `  <rect x="${fmt(ab.x)}" y="${fmt(ab.y)}" width="${fmt(ab.width)}" height="${fmt(ab.height)}" fill="${ab.backgroundColor || '#ffffff'}"/>\n`
+  const view = opts.workspaceViewBox || ab;
+  const bgRect = opts.workspaceViewBox
+    ? (doc.artboards || []).map(board => `  <rect x="${fmt(board.x)}" y="${fmt(board.y)}" width="${fmt(board.width)}" height="${fmt(board.height)}" fill="${escapeXml(board.backgroundColor || '#ffffff')}"/>`).join('\n')
+    : opts.includeBackground || ab.backgroundColor
+      ? `  <rect x="${fmt(ab.x)}" y="${fmt(ab.y)}" width="${fmt(ab.width)}" height="${fmt(ab.height)}" fill="${escapeXml(ab.backgroundColor || '#ffffff')}"/>\n`
       : '';
   const whAttrs = opts.responsive
     ? ''
-    : ` width="${fmt(ab.width)}" height="${fmt(ab.height)}"`;
+    : ` width="${fmt(view.width)}" height="${fmt(view.height)}"`;
 
   const rawSvg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="${fmt(ab.x)} ${fmt(ab.y)} ${fmt(ab.width)} ${fmt(ab.height)}"${whAttrs}>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="${fmt(view.x)} ${fmt(view.y)} ${fmt(view.width)} ${fmt(view.height)}"${whAttrs}>
 ${defsSection}${bgRect}${layerBlocks.join('\n')}
 </svg>`;
 

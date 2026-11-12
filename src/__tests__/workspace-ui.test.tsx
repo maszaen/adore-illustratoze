@@ -451,23 +451,30 @@ it('resizes the outer dock from its accessible boundary and persists its width',
   act(() => root.unmount()); host.remove();
 });
 
-it('previews preset and custom document proportions across categories and orientation', async () => {
+it('uses document icons in preset cards and keeps selection and orientation working', async () => {
   const { StudioModals } = await import('../components/modals/StudioModals');
   useStudioStore.setState({ activeModal: 'new-document' });
   const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
   await act(async () => root.render(<StudioModals />));
-  const page = () => host.querySelector<HTMLElement>('.ai-document-preview .ai-artboard-preview-page')!;
-  expect(parseFloat(page().style.width)).toBeGreaterThan(parseFloat(page().style.height));
+  const content = host.querySelector<HTMLElement>('.ai-new-document-content')!;
+  expect(content.lastElementChild?.classList.contains('ai-new-document-details')).toBe(true);
+  expect(host.querySelector('.ai-document-preview')).toBeNull();
+  const width = host.querySelector<HTMLInputElement>('[aria-label="Width"]')!;
+  const height = host.querySelector<HTMLInputElement>('[aria-label="Height"]')!;
+  expect(Number(width.value)).toBeGreaterThan(Number(height.value));
   act(() => host.querySelector<HTMLButtonElement>('[aria-label="Portrait"]')!.click());
-  expect(parseFloat(page().style.height)).toBeGreaterThan(parseFloat(page().style.width));
+  expect(Number(height.value)).toBeGreaterThan(Number(width.value));
   for (const category of ['Mobile', 'Web', 'Print', 'Film & Video', 'Art & Illustration']) {
     const button = [...host.querySelectorAll<HTMLButtonElement>('.ai-new-document-categories button')].find(b => b.textContent?.toLowerCase() === category.toLowerCase())!;
     act(() => button.click());
+    expect(button.getAttribute('aria-pressed')).toBe('true');
     const cards = host.querySelectorAll('.ai-new-document-presets .ai-preset-card');
     expect(cards.length).toBeGreaterThan(0);
-    expect(host.querySelectorAll('.ai-new-document-presets .ai-artboard-preview-page')).toHaveLength(cards.length);
+    expect(host.querySelectorAll('.ai-new-document-presets .ai-preset-icon')).toHaveLength(cards.length);
     act(() => (cards[0] as HTMLButtonElement).click());
     expect(cards[0].getAttribute('aria-pressed')).toBe('true');
+    expect(Number(width.value)).toBeGreaterThan(0);
+    expect(Number(height.value)).toBeGreaterThan(0);
   }
   act(() => root.unmount()); host.remove(); useStudioStore.setState({ activeModal: null });
 });
