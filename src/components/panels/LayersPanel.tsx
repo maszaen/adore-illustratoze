@@ -358,9 +358,13 @@ export const LayersPanel: React.FC = () => {
     const node = nodesMap[targetObjId];
     if (node) {
       setExpandedLayers((prev) => ({ ...prev, [node.layerId]: true }));
-      if (node.parentId) {
-        setExpandedGroups((prev) => ({ ...prev, [node.parentId!]: true }));
+      const ancestors: string[] = [];
+      let parentId = node.parentId;
+      while (parentId && !ancestors.includes(parentId)) {
+        ancestors.push(parentId);
+        parentId = nodesMap[parentId]?.parentId;
       }
+      setExpandedGroups(prev => ({ ...prev, ...Object.fromEntries(ancestors.map(id => [id, true])) }));
       setHighlightedId(node.id);
       setTimeout(() => setHighlightedId(null), 1400);
     }
@@ -548,7 +552,9 @@ export const LayersPanel: React.FC = () => {
 
   const handleEnterIsolation = (nodeId: string) => {
     const nextIso = isolatedGroupId === nodeId ? null : nodeId;
-    if (typeof store.setIsolatedGroupId === 'function') {
+    if (typeof store.enterIsolationMode === 'function' && typeof store.exitIsolationMode === 'function') {
+      if (nextIso) store.enterIsolationMode(nextIso); else store.exitIsolationMode();
+    } else if (typeof store.setIsolatedGroupId === 'function') {
       store.setIsolatedGroupId(nextIso);
     } else {
       useStudioStore.setState({ isolatedGroupId: nextIso, isolationModeGroupId: nextIso } as any);
@@ -572,8 +578,48 @@ export const LayersPanel: React.FC = () => {
     setEditingId(null);
   };
 
+  const renderNodeRow = (node: VectorNode, layer: LayerItem, depth: number, ancestors: Set<string>): React.ReactNode => {
+    if (ancestors.has(node.id)) return null;
+    const nextAncestors = new Set(ancestors); nextAncestors.add(node.id);
+    const children = (node.children || []).map(id => nodesMap[id]).filter((child): child is VectorNode => Boolean(child));
+    const expanded = expandedGroups[node.id] ?? false;
+    const selected = selectedIds.includes(node.id);
+    const locked = node.locked || layer.locked;
+    const typeLabel = getNodeTypeLabel(node);
+    const fill = node.fills?.find(f => f.visible && f.type !== 'none')?.color || 'transparent';
+    const stroke = node.strokes?.find(s => s.visible)?.color || 'var(--ai-border-input)';
+    const complex = node.fills?.length > 1 || node.strokes?.length > 1 || node.effects?.length > 0;
+    return <React.Fragment key={node.id}>
+      <div className={`ai-layer-row ai-layer-object group ${highlightedId === node.id ? 'is-located' : selected ? 'is-selected' : ''}`}
+        data-layer-node={node.id} data-depth={depth} onClick={e => {
+          e.stopPropagation(); if (locked) return;
+          setSelection(e.shiftKey ? selected ? selectedIds.filter(id => id !== node.id) : [...selectedIds, node.id] : [node.id]);
+          setActiveLayer(layer.id);
+        }} onDoubleClick={() => { if (children.length) handleEnterIsolation(node.id); }}>
+        <button type="button" className="ai-layer-control" aria-label={`${node.visible ? 'Hide' : 'Show'} ${node.name || typeLabel}`} onClick={e => toggleNodeVisibility(node.id, e)}>
+          {node.visible ? <Eye size={13} /> : <span className="ai-layer-hidden-mark" />}
+        </button>
+        <button type="button" className="ai-layer-control" aria-label={`${node.locked ? 'Unlock' : 'Lock'} ${node.name || typeLabel}`} onClick={e => toggleNodeLock(node.id, e)}>
+          {node.locked ? <Lock size={12} /> : <span className="ai-layer-empty-lock" />}
+        </button>
+        <span className="ai-layer-indent" style={{ width: Math.min(depth * 12, 96) }} />
+        <span className="ai-layer-color" style={{ backgroundColor: layer.color || '#4f9eff' }} aria-hidden="true" />
+        {children.length ? <button type="button" className="ai-layer-control ai-layer-disclosure" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.name || typeLabel}`} aria-expanded={expanded} onClick={e => { e.stopPropagation(); setExpandedGroups(prev => ({ ...prev, [node.id]: !expanded })); }}>
+          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </button> : <span className="ai-layer-disclosure" />}
+        <span className="ai-layer-thumbnail" style={{ backgroundColor: fill, borderColor: stroke }} aria-hidden="true" />
+        <div className="ai-layer-name" onDoubleClick={e => { e.stopPropagation(); setEditingId(node.id); setEditingName(node.name || typeLabel); }}>
+          {editingId === node.id ? <input autoFocus aria-label="Object name" value={editingName} onChange={e => setEditingName(e.target.value)} onBlur={() => commitRename(node.id, false)} onKeyDown={e => { if (e.key === 'Enter') commitRename(node.id, false); if (e.key === 'Escape') setEditingId(null); }} /> : <span title={node.name || typeLabel}>{node.name || typeLabel}</span>}
+        </div>
+        <button type="button" className={`ai-layer-target ${activeTargetId === node.id || complex ? 'is-active' : ''}`} aria-label={`Target ${node.name || typeLabel} appearance`} onClick={e => handleTargetAppearance(node.id, false, e)}><span /></button>
+        <span className="ai-layer-selection">{selected && <span style={{ backgroundColor: layer.color || '#4f9eff' }} />}</span>
+      </div>
+      {expanded && children.map(child => renderNodeRow(child, layer, depth + 1, nextAncestors))}
+    </React.Fragment>;
+  };
+
   return (
-    <div className="flex flex-col h-full bg-[#323232] text-[#e8e8e8] select-none text-[11px] font-sans">
+    <div className="ai-layers-panel flex flex-col h-full select-none text-[11px] font-sans">
       {/* Header Bar */}
       <div className="flex items-center justify-between px-2 py-1 bg-[#262626] border-b border-[#1a1a1a]">
         <div className="flex items-center gap-1.5">
@@ -670,10 +716,10 @@ export const LayersPanel: React.FC = () => {
 
       {/* Column Headers */}
       <div className="grid grid-cols-[20px_20px_1fr_40px] items-center px-1 py-0.5 bg-[#292929] border-b border-[#1a1a1a] text-[10px] text-[#9e9e9e]">
-        <span className="text-center" title="Visibility (Ctrl+Click for Outline View)">👁</span>
-        <span className="text-center" title="Lock / Unlock">🔒</span>
+        <span className="ai-layer-header-icon" title="Visibility (Ctrl+Click for Outline View)"><Eye size={13} aria-hidden="true" /></span>
+        <span className="ai-layer-header-icon" title="Lock / Unlock"><Lock size={12} aria-hidden="true" /></span>
         <span className="pl-2">Hierarchy</span>
-        <span className="text-right pr-1" title="Target Appearance (◎) & Selection (■)">◎ ■</span>
+        <span className="ai-layer-header-indicators" title="Target appearance and selection"><span className="ai-layer-header-target" /><span className="ai-layer-header-selection" /></span>
       </div>
 
       {/* Layers & Sublayers Tree */}
@@ -687,24 +733,20 @@ export const LayersPanel: React.FC = () => {
           const isOutline = !!layer.outlineMode;
           const isTemplate = !!layer.templateMode;
 
-          const layerNodes = useMemo(() => {
-            if (Array.isArray(layer.nodeIds) && layer.nodeIds.length > 0) {
-              return layer.nodeIds
-                .map((id) => nodesMap[id])
-                .filter((n): n is VectorNode => Boolean(n && !n.parentId));
-            }
-            return allNodes.filter((n) => n.layerId === layer.id && !n.parentId);
-          }, [layer.nodeIds, layer.id, nodesMap, allNodes]);
+          const layerNodes = Array.isArray(layer.nodeIds) && layer.nodeIds.length > 0
+            ? layer.nodeIds.map(id => nodesMap[id]).filter((n): n is VectorNode => Boolean(n && !n.parentId))
+            : allNodes.filter(n => n.layerId === layer.id && !n.parentId);
 
           const selectedInLayer = layerNodes.filter((n) => selectedIds.includes(n.id));
           const allSelectedInLayer =
             layerNodes.length > 0 && selectedInLayer.length === layerNodes.length;
-          const someSelectedInLayer = selectedInLayer.length > 0;
+          const someSelectedInLayer = allNodes.some(n => n.layerId === layer.id && selectedIds.includes(n.id));
 
           return (
             <div key={layer.id} className="bg-[#323232]">
               {/* Layer Row */}
               <div
+                data-layer-id={layer.id}
                 onClick={() => setActiveLayer(layer.id)}
                 onDoubleClick={() => setLayerOptionsModal(layer)}
                 className={`group flex items-center h-7 px-1 cursor-pointer transition-colors ${
@@ -715,6 +757,7 @@ export const LayersPanel: React.FC = () => {
                 <button
                   onClick={(e) => toggleLayerVisibility(layer, e)}
                   title="Click: Toggle Visibility | Ctrl+Click: Toggle Layer Outline View"
+                  aria-label={`${isVisible ? 'Hide' : 'Show'} layer ${layer.name}`}
                   className="w-5 h-5 flex items-center justify-center text-[#cfcfcf] hover:text-white"
                 >
                   {!isVisible ? (
@@ -734,6 +777,7 @@ export const LayersPanel: React.FC = () => {
                 <button
                   onClick={(e) => toggleLayerLock(layer, e)}
                   title="Toggle Layer Lock"
+                  aria-label={`${isLocked ? 'Unlock' : 'Lock'} layer ${layer.name}`}
                   className="w-5 h-5 flex items-center justify-center text-[#cfcfcf] hover:text-white"
                 >
                   {isLocked ? (
@@ -745,7 +789,7 @@ export const LayersPanel: React.FC = () => {
 
                 {/* Layer Selection Color Swatch Bar */}
                 <span
-                  className="w-1.5 h-4 rounded-sm mx-1 shrink-0"
+                  className="ai-layer-color"
                   style={{ backgroundColor: layerColor }}
                   title={`Selection Color: ${layerColor}`}
                 />
@@ -757,6 +801,7 @@ export const LayersPanel: React.FC = () => {
                     setExpandedLayers((prev) => ({ ...prev, [layer.id]: !isExpanded }));
                   }}
                   className="w-4 h-4 flex items-center justify-center text-[#9e9e9e] hover:text-white"
+                  aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${layer.name}`} aria-expanded={isExpanded}
                 >
                   {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                 </button>
@@ -823,6 +868,7 @@ export const LayersPanel: React.FC = () => {
                 <button
                   onClick={(e) => handleTargetAppearance(layer.id, true, e)}
                   title="Target Layer Appearance & Effects"
+                  aria-label={`Target layer ${layer.name} appearance`}
                   className="w-5 h-5 flex items-center justify-center"
                 >
                   <span
@@ -840,6 +886,7 @@ export const LayersPanel: React.FC = () => {
                 <button
                   onClick={(e) => handleSelectLayerAll(layer, e)}
                   title="Click to Select All Objects in Layer"
+                  aria-label={`Select objects in ${layer.name}`}
                   className="w-4 h-5 flex items-center justify-center"
                 >
                   {someSelectedInLayer ? (
@@ -856,194 +903,7 @@ export const LayersPanel: React.FC = () => {
               {/* Sublayers & Objects inside Layer */}
               {isExpanded && (
                 <div className="bg-[#2c2c2c] divide-y divide-[#252525]">
-                  {layerNodes.map((node) => {
-                    const isNodeSelected = selectedIds.includes(node.id);
-                    const isNodeVisible = node.visible !== false;
-                    const isNodeLocked = !!node.locked;
-                    const typeBadge = getNodeTypeLabel(node);
-                    const isContainer =
-                      node.type === 'group' ||
-                      node.type === 'compound-path' ||
-                      node.type === 'compound-shape' ||
-                      node.type === 'clipping-group';
-                    const isGroupExpanded = expandedGroups[node.id] ?? false;
-                    const childNodes = (node.children || [])
-                      .map((cid) => nodesMap[cid])
-                      .filter((c): c is VectorNode => Boolean(c));
-
-                    const primaryFill = node.fills?.find((f) => f.visible && f.type !== 'none')?.color || 'transparent';
-                    const primaryStroke = node.strokes?.find((s) => s.visible)?.color || '#666';
-                    const hasComplexAppearance =
-                      (node.fills?.length || 0) > 1 ||
-                      (node.strokes?.length || 0) > 1 ||
-                      (node.effects?.length || 0) > 0;
-
-                    return (
-                      <React.Fragment key={node.id}>
-                        <div
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (isNodeLocked || isLocked) return;
-                            if (e.shiftKey) {
-                              const next = isNodeSelected
-                                ? selectedIds.filter((id) => id !== node.id)
-                                : [...selectedIds, node.id];
-                              setSelection(next);
-                            } else {
-                              setSelection([node.id]);
-                            }
-                            setActiveLayer(layer.id);
-                          }}
-                          onDoubleClick={() => {
-                            if (isContainer) handleEnterIsolation(node.id);
-                          }}
-                          className={`group flex items-center h-6 px-1 cursor-pointer transition-colors ${
-                            highlightedId === node.id
-                              ? 'bg-[#1473e6]/40'
-                              : isNodeSelected
-                              ? 'bg-[#384656]'
-                              : 'hover:bg-[#353535]'
-                          }`}
-                        >
-                          {/* Object Eye */}
-                          <button
-                            onClick={(e) => toggleNodeVisibility(node.id, e)}
-                            className="w-5 h-5 flex items-center justify-center text-[#b8b8b8] hover:text-white"
-                          >
-                            {isNodeVisible ? <Eye size={11} /> : <span className="w-2 h-0.5 bg-[#666]" />}
-                          </button>
-
-                          {/* Object Lock */}
-                          <button
-                            onClick={(e) => toggleNodeLock(node.id, e)}
-                            className="w-5 h-5 flex items-center justify-center text-[#b8b8b8] hover:text-white"
-                          >
-                            {isNodeLocked ? (
-                              <Lock size={10} className="text-[#ff9a00]" />
-                            ) : (
-                              <span className="w-2 h-2 border border-transparent group-hover:border-[#555]" />
-                            )}
-                          </button>
-
-                          {/* Indent + Color Marker */}
-                          <span
-                            className="w-0.5 h-3.5 ml-3 mr-1.5 rounded-full shrink-0"
-                            style={{ backgroundColor: layerColor }}
-                          />
-
-                          {isContainer ? (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setExpandedGroups((p) => ({ ...p, [node.id]: !isGroupExpanded }));
-                              }}
-                              className="w-3.5 h-3.5 flex items-center justify-center text-[#9e9e9e]"
-                            >
-                              {isGroupExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                            </button>
-                          ) : (
-                            <span className="w-3.5" />
-                          )}
-
-                          {/* Mini Shape Swatch Preview */}
-                          <span
-                            className="w-3 h-3 rounded-[2px] border mx-1 shrink-0"
-                            style={{
-                              backgroundColor: primaryFill,
-                              borderColor: primaryStroke,
-                            }}
-                          />
-
-                          {/* Object Name / Type */}
-                          <div
-                            className="flex-1 truncate flex items-center gap-1"
-                            onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              setEditingId(node.id);
-                              setEditingName(node.name || typeBadge);
-                            }}
-                          >
-                            {editingId === node.id ? (
-                              <input
-                                autoFocus
-                                value={editingName}
-                                onChange={(e) => setEditingName(e.target.value)}
-                                onBlur={() => commitRename(node.id, false)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') commitRename(node.id, false);
-                                  if (e.key === 'Escape') setEditingId(null);
-                                }}
-                                className="w-full bg-[#1e1e1e] text-white px-1 py-0.2 rounded border border-[#1473e6] text-[10px] outline-none"
-                              />
-                            ) : (
-                              <>
-                                <span
-                                  className={`truncate ${
-                                    node.type === 'clipping-group' ? 'underline decoration-dotted' : ''
-                                  }`}
-                                >
-                                  {node.name || typeBadge}
-                                </span>
-                                {node.name && node.name !== typeBadge && (
-                                  <span className="text-[9px] text-[#888] shrink-0">{typeBadge}</span>
-                                )}
-                              </>
-                            )}
-                          </div>
-
-                          {/* Target Meatball Icon */}
-                          <button
-                            onClick={(e) => handleTargetAppearance(node.id, false, e)}
-                            title="Target Appearance (Double-ring indicates active effects or multiple fills/strokes)"
-                            className="w-5 h-5 flex items-center justify-center"
-                          >
-                            <span
-                              className={`w-3 h-3 rounded-full border flex items-center justify-center ${
-                                activeTargetId === node.id || hasComplexAppearance
-                                  ? 'border-white bg-[#777]'
-                                  : 'border-[#888] hover:border-white'
-                              }`}
-                            >
-                              <span className="w-1 h-1 rounded-full bg-current" />
-                            </span>
-                          </button>
-
-                          {/* Selection Indicator Square */}
-                          <div className="w-4 h-5 flex items-center justify-center">
-                            {isNodeSelected && (
-                              <span className="w-2 h-2" style={{ backgroundColor: layerColor }} />
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Nested Group Children */}
-                        {isContainer &&
-                          isGroupExpanded &&
-                          childNodes.map((child) => {
-                            const isChildSel = selectedIds.includes(child.id);
-                            return (
-                              <div
-                                key={child.id}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelection([child.id]);
-                                }}
-                                className={`flex items-center h-5 pl-8 pr-1 cursor-pointer text-[10px] ${
-                                  isChildSel ? 'bg-[#384656]' : 'hover:bg-[#353535]'
-                                }`}
-                              >
-                                <span className="flex-1 truncate text-[#ccc]">
-                                  {child.name || getNodeTypeLabel(child)}
-                                </span>
-                                {isChildSel && (
-                                  <span className="w-2 h-2 mr-1" style={{ backgroundColor: layerColor }} />
-                                )}
-                              </div>
-                            );
-                          })}
-                      </React.Fragment>
-                    );
-                  })}
+                  {layerNodes.map(node => renderNodeRow(node, layer, 1, new Set()))}
                   {layerNodes.length === 0 && (
                     <div className="pl-9 py-1 text-[10px] text-[#777] italic">Empty layer</div>
                   )}

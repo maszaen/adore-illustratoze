@@ -390,7 +390,7 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
                 <div key={ch} className="flex items-center gap-2">
                   <span className="w-4 uppercase font-semibold text-[#b0b0b0]">{ch}</span>
                   <input
-                    type="range"
+                    type="range" aria-label={`${ch.toUpperCase()} channel`}
                     min={0}
                     max={255}
                     step={colorMode === 'WebSafe' ? 51 : 1}
@@ -424,7 +424,7 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
                 <div key={ch} className="flex items-center gap-2">
                   <span className="w-4 uppercase font-semibold text-[#b0b0b0]">{ch}</span>
                   <input
-                    type="range"
+                    type="range" aria-label={`${ch.toUpperCase()} channel`}
                     min={0}
                     max={100}
                     value={cmyk[ch]}
@@ -461,7 +461,7 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
                 <div key={item.key} className="flex items-center gap-2">
                   <span className="w-4 uppercase font-semibold text-[#b0b0b0]">{item.key}</span>
                   <input
-                    type="range"
+                    type="range" aria-label={`${item.key.toUpperCase()} channel`}
                     min={0}
                     max={item.max}
                     value={hsb[item.key]}
@@ -492,7 +492,7 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
             <div className="flex items-center gap-2">
               <span className="w-4 font-semibold text-[#b0b0b0]">K</span>
               <input
-                type="range"
+                type="range" aria-label="Grayscale"
                 min={0}
                 max={100}
                 value={kGray}
@@ -674,7 +674,7 @@ export const ColorSwatchesGradientPanel: React.FC<ColorSwatchesGradientPanelProp
             <div className="px-2.5 py-1.5 bg-[#292929] border-b border-[#1a1a1a] flex items-center gap-2">
               <span className="text-[10px] text-[#ff9a00] font-semibold">Global Tint:</span>
               <input
-                type="range"
+                type="range" aria-label="Global tint"
                 min={0}
                 max={100}
                 value={globalTint}

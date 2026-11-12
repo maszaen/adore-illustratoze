@@ -1,3 +1,4 @@
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, X } from 'lucide-react';
 import React from 'react';
 import { useStudioStore } from '../../state/useStudioStore';
 import { getToolDefinition } from '../../core/tools/toolRegistry';
@@ -167,7 +168,7 @@ export const BottomStatusBar: React.FC = () => {
             title="First Artboard"
             style={{ width: 16, height: 16, fontSize: 9 }}
           >
-            |◀
+            <ChevronsLeft size={13} aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -177,7 +178,7 @@ export const BottomStatusBar: React.FC = () => {
             title="Previous Artboard"
             style={{ width: 16, height: 16, fontSize: 9 }}
           >
-            ◀
+            <ChevronLeft size={13} aria-hidden="true" />
           </button>
 
           <select
@@ -193,7 +194,7 @@ export const BottomStatusBar: React.FC = () => {
               minWidth: 110,
               maxWidth: 160,
               fontSize: 10.5,
-              padding: '0 4px',
+              padding: '0 19px 0 4px',
             }}
           >
             {artboards.map((ab, i) => (
@@ -211,7 +212,7 @@ export const BottomStatusBar: React.FC = () => {
             title="Next Artboard"
             style={{ width: 16, height: 16, fontSize: 9 }}
           >
-            ▶
+            <ChevronRight size={13} aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -221,7 +222,7 @@ export const BottomStatusBar: React.FC = () => {
             title="Last Artboard"
             style={{ width: 16, height: 16, fontSize: 9 }}
           >
-            ▶|
+            <ChevronsRight size={13} aria-hidden="true" />
           </button>
         </div>
 
@@ -280,7 +281,7 @@ export const BottomStatusBar: React.FC = () => {
               fontSize: 11,
             }}
           >
-            ×
+            <X size={13} aria-hidden="true" />
           </button>
         </div>
       )}

@@ -30,6 +30,7 @@ import type {
   VectorNode,
 } from '../../core/types';
 import { NumericScrubInput } from '../primitives/NumericScrubInput';
+import { ArtboardPreview } from '../primitives/ArtboardPreview';
 import { AngleDial } from '../primitives/AngleDial';
 import {
   DOCUMENT_PRESETS,
@@ -547,7 +548,7 @@ export const StudioModals: React.FC = () => {
             >
               {newDocCat === 'saved' && savedPresets.length === 0 && <div style={{ color: 'var(--ai-text-secondary)', gridColumn: '1 / -1' }}>No saved presets yet.</div>}
               {newDocCat === 'saved' && savedPresets.map((preset) => (
-                <button key={preset.id} type="button" onClick={() => {
+                <button className="ai-preset-card" key={preset.id} type="button" aria-pressed={selectedPresetId === preset.id} onClick={() => {
                   setSelectedPresetId(preset.id);
                   setNewDocName(preset.name); setNewDocW(preset.width); setNewDocH(preset.height);
                   setNewDocUnit(preset.unit); setNewDocColorMode(preset.colorMode); setNewDocPpi(preset.rasterPpi);
@@ -555,14 +556,15 @@ export const StudioModals: React.FC = () => {
                   setNewDocBleedTop(preset.bleedTop); setNewDocBleedBottom(preset.bleedBottom);
                   setNewDocBleedLeft(preset.bleedLeft); setNewDocBleedRight(preset.bleedRight);
                 }} style={{ background: 'var(--ai-bg-panel-header)', color: 'var(--ai-text-primary)', textAlign: 'left', border: selectedPresetId === preset.id ? '1px solid #1473e6' : '1px solid var(--ai-border-subtle)', borderRadius: 6, padding: 12, cursor: 'pointer' }}>
+                  <ArtboardPreview width={preset.width} height={preset.height} compact />
                   <div style={{ fontWeight: 600 }}>{preset.name}</div>
                   <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 4 }}>{preset.width} × {preset.height} {preset.unit} · {preset.colorMode} ({preset.rasterPpi} ppi)</div>
                 </button>
               ))}
               {DOCUMENT_PRESETS.filter((p) => p.category === newDocCat).map(
                 (preset) => (
-                  <div
-                    key={preset.id}
+                  <button type="button" className="ai-preset-card"
+                    key={preset.id} aria-pressed={selectedPresetId === preset.id}
                     onClick={() => applySelectedPreset(preset)}
                     style={{
                       background: 'var(--ai-bg-panel-header)',
@@ -573,14 +575,17 @@ export const StudioModals: React.FC = () => {
                       borderRadius: 6,
                       padding: 12,
                       cursor: 'pointer',
+                      textAlign: 'left',
+                      color: 'var(--ai-text-primary)',
                     }}
                   >
+                    <ArtboardPreview width={preset.width} height={preset.height} compact />
                     <div style={{ fontWeight: 600, color: 'var(--ai-text-primary)' }}>{preset.name}</div>
                     <div style={{ fontSize: 11, color: 'var(--ai-text-secondary)', marginTop: 4 }}>
                       {preset.width} × {preset.height} {preset.unit} • {preset.colorMode} ({preset.ppi}{' '}
                       ppi)
                     </div>
-                  </div>
+                  </button>
                 )
               )}
             </div>
@@ -599,6 +604,10 @@ export const StudioModals: React.FC = () => {
               }}
             >
               <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--ai-text-primary)' }}>PRESET DETAILS</div>
+              <div className="ai-document-preview" aria-label={`Artboard preview: ${newDocW} by ${newDocH} ${newDocUnit}`}>
+                <ArtboardPreview width={newDocW} height={newDocH} />
+                <div>{newDocW} × {newDocH} {newDocUnit} · {newDocArtboards} {newDocArtboards === 1 ? 'artboard' : 'artboards'}</div>
+              </div>
 
               <div>
                 <label style={labelStyle}>Document Title</label>
@@ -615,8 +624,9 @@ export const StudioModals: React.FC = () => {
                   <label style={labelStyle}>Width</label>
                   <input
                     type="number"
+                    aria-label="Width" min={1}
                     value={newDocW}
-                    onChange={(e) => setNewDocW(Math.max(1, Number(e.target.value)))}
+                    onChange={(e) => { const w = Math.max(1, Number(e.target.value)); setNewDocW(w); if (w !== newDocH) setNewDocOrientation(w > newDocH ? 'landscape' : 'portrait'); }}
                     style={fullInputStyle}
                   />
                 </div>
@@ -642,8 +652,9 @@ export const StudioModals: React.FC = () => {
                   <label style={labelStyle}>Height</label>
                   <input
                     type="number"
+                    aria-label="Height" min={1}
                     value={newDocH}
-                    onChange={(e) => setNewDocH(Math.max(1, Number(e.target.value)))}
+                    onChange={(e) => { const h = Math.max(1, Number(e.target.value)); setNewDocH(h); if (h !== newDocW) setNewDocOrientation(newDocW > h ? 'landscape' : 'portrait'); }}
                     style={fullInputStyle}
                   />
                 </div>
@@ -651,6 +662,7 @@ export const StudioModals: React.FC = () => {
                   <label style={labelStyle}>Orientation</label>
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button
+                      aria-label="Portrait" aria-pressed={newDocOrientation === 'portrait'}
                       onClick={() => {
                         setNewDocOrientation('portrait');
                         if (newDocW > newDocH) {
@@ -667,6 +679,7 @@ export const StudioModals: React.FC = () => {
                       Port
                     </button>
                     <button
+                      aria-label="Landscape" aria-pressed={newDocOrientation === 'landscape'}
                       onClick={() => {
                         setNewDocOrientation('landscape');
                         if (newDocH > newDocW) {
@@ -903,7 +916,7 @@ export const StudioModals: React.FC = () => {
                   </button>
                 </div>
                 <input
-                  type="range"
+                  type="range" aria-label="Hue"
                   min={-180}
                   max={180}
                   value={hueDelta}
@@ -927,7 +940,7 @@ export const StudioModals: React.FC = () => {
                   <span style={{ fontSize: 11 }}>{Math.round(brightMult * 100)}%</span>
                 </div>
                 <input
-                  type="range"
+                  type="range" aria-label="Brightness"
                   min={40}
                   max={150}
                   value={Math.round(brightMult * 100)}
@@ -1513,7 +1526,7 @@ export const StudioModals: React.FC = () => {
               <div>
                 <label style={labelStyle}>Quality ({webQuality}%)</label>
                 <input
-                  type="range"
+                  type="range" aria-label="Quality"
                   min={10}
                   max={100}
                   value={webQuality}
@@ -2137,7 +2150,7 @@ export const StudioModals: React.FC = () => {
                 <span>{simpPrecision}%</span>
               </div>
               <input
-                type="range"
+                type="range" aria-label="Curve precision"
                 min={0}
                 max={100}
                 value={simpPrecision}
@@ -2151,7 +2164,7 @@ export const StudioModals: React.FC = () => {
                 <span>{simpAngle}°</span>
               </div>
               <input
-                type="range"
+                type="range" aria-label="Angle threshold"
                 min={0}
                 max={180}
                 value={simpAngle}
@@ -2376,7 +2389,7 @@ export const StudioModals: React.FC = () => {
                     <span>{warpBend}%</span>
                   </div>
                   <input
-                    type="range"
+                    type="range" aria-label="Bend"
                     min={-100}
                     max={100}
                     value={warpBend}
@@ -2390,7 +2403,7 @@ export const StudioModals: React.FC = () => {
                     <span>{warpHDist}%</span>
                   </div>
                   <input
-                    type="range"
+                    type="range" aria-label="Horizontal distortion"
                     min={-100}
                     max={100}
                     value={warpHDist}
@@ -2404,7 +2417,7 @@ export const StudioModals: React.FC = () => {
                     <span>{warpVDist}%</span>
                   </div>
                   <input
-                    type="range"
+                    type="range" aria-label="Vertical distortion"
                     min={-100}
                     max={100}
                     value={warpVDist}
@@ -2534,7 +2547,7 @@ export const StudioModals: React.FC = () => {
               <div>
                 <label style={labelStyle}>Dim Copies to: {patDimCopies}%</label>
                 <input
-                  type="range"
+                  type="range" aria-label="Dim copies"
                   min={10}
                   max={100}
                   value={patDimCopies}
@@ -2950,7 +2963,7 @@ export const StudioModals: React.FC = () => {
                   <span>{traceThreshold}</span>
                 </div>
                 <input
-                  type="range"
+                  type="range" aria-label="Threshold"
                   min={1}
                   max={254}
                   value={traceThreshold}
@@ -2965,7 +2978,7 @@ export const StudioModals: React.FC = () => {
                   <span>{traceColors}</span>
                 </div>
                 <input
-                  type="range"
+                  type="range" aria-label="Colors"
                   min={2}
                   max={64}
                   value={traceColors}
@@ -2980,7 +2993,7 @@ export const StudioModals: React.FC = () => {
                 <span>{tracePaths}%</span>
               </div>
               <input
-                type="range"
+                type="range" aria-label="Paths"
                 min={1}
                 max={100}
                 value={tracePaths}
@@ -2994,7 +3007,7 @@ export const StudioModals: React.FC = () => {
                 <span>{traceCorners}%</span>
               </div>
               <input
-                type="range"
+                type="range" aria-label="Corners"
                 min={0}
                 max={100}
                 value={traceCorners}
@@ -3008,7 +3021,7 @@ export const StudioModals: React.FC = () => {
                 <span>{traceNoise} px</span>
               </div>
               <input
-                type="range"
+                type="range" aria-label="Noise"
                 min={1}
                 max={100}
                 value={traceNoise}
