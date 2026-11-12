@@ -1,3 +1,4 @@
+import { GripVertical, PanelLeftClose, ChevronsLeft, ChevronsRight, X, ArrowUpDown } from 'lucide-react';
 import React, { useState, useRef, useEffect } from 'react';
 import { useStudioStore } from '../../state/useStudioStore';
 import { TOOL_GROUPS, ToolGroup, ToolDefinition } from '../../core/tools/toolRegistry';
@@ -278,8 +279,8 @@ export const LeftToolbar: React.FC = () => {
         >
           <button type="button" onPointerDown={dragToolbar} onDoubleClick={() => setToolbarPosition(null)}
             title="Drag to move toolbar; double-click to dock" aria-label="Move toolbar; double-click to dock"
-            style={{ width: 20, height: 15, border: 0, background: 'transparent', color: 'var(--ai-text-secondary)', cursor: 'move', padding: 0 }}>⠿</button>
-          {toolbarPosition && <button type="button" title="Dock toolbar" aria-label="Dock toolbar" onClick={() => setToolbarPosition(null)} style={{ border: 0, background: 'transparent', color: 'var(--ai-text-primary)', cursor: 'pointer' }}>⇥</button>}
+            style={{ width: 20, height: 15, border: 0, background: 'transparent', color: 'var(--ai-text-secondary)', cursor: 'move', padding: 0 }}><GripVertical size={14} aria-hidden="true" /></button>
+          {toolbarPosition && <button type="button" title="Dock toolbar" aria-label="Dock toolbar" onClick={() => setToolbarPosition(null)} style={{ border: 0, background: 'transparent', color: 'var(--ai-text-primary)', cursor: 'pointer' }}><PanelLeftClose size={14} aria-hidden="true" /></button>}
           <button
             type="button"
             onClick={toggleColumns}
@@ -295,7 +296,7 @@ export const LeftToolbar: React.FC = () => {
               lineHeight: 1,
             }}
           >
-            {columns === 2 ? '«' : '»'}
+            {columns === 2 ? <ChevronsLeft size={14} /> : <ChevronsRight size={14} />}
           </button>
         </div>
 
@@ -303,7 +304,7 @@ export const LeftToolbar: React.FC = () => {
           title="Customize tool order" onClick={() => setCustomizing(value => !value)}>
           {customizing ? 'Done' : 'Edit'}
         </button>
-        {customizing && <span className="ai-toolbar-hint" title="Drag tools or use arrow keys to reorder">↕</span>}
+        {customizing && <span className="ai-toolbar-hint" title="Drag tools or use arrow keys to reorder"><ArrowUpDown size={13} /></span>}
 
         {/* Tool Buttons Grid */}
         <div className="ai-tool-grid">
@@ -736,7 +737,7 @@ export const LeftToolbar: React.FC = () => {
                 cursor: 'pointer',
               }}
             >
-              ×
+              <X size={14} aria-hidden="true" />
             </button>
           </div>
 

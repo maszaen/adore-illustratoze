@@ -982,9 +982,9 @@ export const ControlBar: React.FC = () => {
                   }}
                   style={{ width: 76 }}
                 >
-                  <option value="round">╭ Round</option>
-                  <option value="inverted">╰ Inverted</option>
-                  <option value="chamfer">╱ Chamfer</option>
+                  <option value="round">Round</option>
+                  <option value="inverted">Inverted</option>
+                  <option value="chamfer">Chamfer</option>
                 </select>
               </>
             )}

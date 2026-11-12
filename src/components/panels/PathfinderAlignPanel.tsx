@@ -7,6 +7,7 @@ import {
   Maximize2,
   Grid,
   Scissors,
+  AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, ArrowUpDown, ArrowLeftRight,
 } from 'lucide-react';
 import { useStudioStore } from '../../state/useStudioStore';
 import { NumericScrubInput } from '../primitives/NumericScrubInput';
@@ -630,21 +631,21 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
             </span>
             <div className="grid grid-cols-6 gap-1">
               {[
-                { op: 'left' as AlignOp, title: 'Horizontal Align Left', sym: '⫷' },
-                { op: 'center-h' as AlignOp, title: 'Horizontal Align Center', sym: '⫿' },
-                { op: 'right' as AlignOp, title: 'Horizontal Align Right', sym: '⫸' },
-                { op: 'top' as AlignOp, title: 'Vertical Align Top', sym: '⊤' },
-                { op: 'center-v' as AlignOp, title: 'Vertical Align Center', sym: '⊶' },
-                { op: 'bottom' as AlignOp, title: 'Vertical Align Bottom', sym: '⊥' },
+                { op: 'left' as AlignOp, title: 'Horizontal Align Left', Icon: AlignStartVertical },
+                { op: 'center-h' as AlignOp, title: 'Horizontal Align Center', Icon: AlignCenterVertical },
+                { op: 'right' as AlignOp, title: 'Horizontal Align Right', Icon: AlignEndVertical },
+                { op: 'top' as AlignOp, title: 'Vertical Align Top', Icon: AlignStartHorizontal },
+                { op: 'center-v' as AlignOp, title: 'Vertical Align Center', Icon: AlignCenterHorizontal },
+                { op: 'bottom' as AlignOp, title: 'Vertical Align Bottom', Icon: AlignEndHorizontal },
               ].map((btn) => (
                 <button
                   key={btn.op}
                   onClick={() => handleAlign(btn.op)}
                   disabled={selectedNodes.length === 0}
-                  title={btn.title}
+                  title={btn.title} aria-label={btn.title}
                   className="h-7 rounded bg-[#292929] hover:bg-[#1473e6] disabled:opacity-40 border border-[#1a1a1a] flex items-center justify-center text-[13px]"
                 >
-                  {btn.sym}
+                  <btn.Icon size={15} aria-hidden="true" />
                 </button>
               ))}
             </div>
@@ -690,7 +691,7 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
                   title="Vertical Distribute Space"
                   className="ai-btn px-2"
                 >
-                  ↕
+                  <ArrowUpDown size={14} aria-hidden="true" />
                 </button>
                 <button
                   onClick={() => handleAlign('spacing-h')}
@@ -698,7 +699,7 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
                   title="Horizontal Distribute Space"
                   className="ai-btn px-2"
                 >
-                  ↔
+                  <ArrowLeftRight size={14} aria-hidden="true" />
                 </button>
                 <NumericScrubInput
                   value={distributeSpacingVal}
@@ -773,7 +774,7 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
             </div>
 
             {/* X, Y, W, H + Constrain Proportions Link */}
-            <div className="grid grid-cols-2 gap-x-2 gap-y-1.5 flex-1">
+            <div className="ai-form-grid flex-1 min-w-0">
               <NumericScrubInput
                 label="X:"
                 value={displayedX}

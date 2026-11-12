@@ -180,6 +180,7 @@ export const NumericScrubInput: React.FC<NumericScrubInputProps> = ({
         ref={inputRef}
         type="text"
         className="ai-input"
+        aria-label={typeof label === 'string' ? label.replace(/:$/, '') : title}
         disabled={disabled}
         value={text}
         onFocus={(e) => {

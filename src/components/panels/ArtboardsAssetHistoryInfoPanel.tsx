@@ -15,6 +15,7 @@ import {
   Layers,
   RotateCcw,
   RotateCw,
+  Link2,
 } from 'lucide-react';
 import { useStudioStore } from '../../state/useStudioStore';
 import { NumericScrubInput } from '../primitives/NumericScrubInput';
@@ -131,13 +132,11 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
     updater: (d: any, s: any) => void,
     label = 'Update Document'
   ) => {
-    if (typeof store.pushHistory === 'function') store.pushHistory(label);
-    useStudioStore.setState((state: any) => {
-      const next = structuredClone ? structuredClone(state) : JSON.parse(JSON.stringify(state));
-      const d = next.document || next.activeDocument || next;
-      updater(d, next);
-      return next;
-    });
+    const selection: { selectedIds?: string[]; selectedNodeIds?: string[] } = {};
+    store.updateDocument((d: any) => updater(d, selection), label);
+    if (selection.selectedNodeIds) {
+      useStudioStore.setState({ selectedIds: selection.selectedIds || selection.selectedNodeIds, selectedNodeIds: selection.selectedNodeIds });
+    }
   };
 
   // ============================================================================
@@ -459,8 +458,8 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
           TAB 1: ARTBOARDS PANEL
           ==================================================================== */}
       {activeTab === 'artboards' && (
-        <div className="flex flex-col flex-1 overflow-hidden">
-          <div className="flex-1 overflow-y-auto divide-y divide-[#242424]">
+        <div className="ai-artboards-panel flex flex-col flex-1">
+          <div className="ai-artboard-list divide-y divide-[#242424]">
             {artboards.map((ab, idx) => {
               const isActive = ab.id === activeArtboardId;
               return (
@@ -471,11 +470,11 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                       d.activeArtboardId = ab.id;
                     }, 'Select Artboard')
                   }
-                  className={`flex items-center justify-between px-2 py-1.5 cursor-pointer ${
+                  className={`ai-artboard-list-row flex items-center justify-between px-2 py-1.5 cursor-pointer ${
                     isActive ? 'bg-[#384656]' : 'hover:bg-[#383838]'
                   }`}
                 >
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex flex-1 items-center gap-2 min-w-0">
                     <span className="px-1.5 py-0.5 rounded bg-[#1e1e1e] text-[#ff9a00] font-mono text-[10px]">
                       {String(idx + 1).padStart(2, '0')}
                     </span>
@@ -490,10 +489,11 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                           if (target) target.name = val;
                         });
                       }}
-                      className="bg-transparent border-b border-transparent focus:border-[#1473e6] outline-none truncate w-28"
+                      aria-label={`Artboard ${idx + 1} name`}
+                      className="bg-transparent border-b border-transparent focus:border-[#1473e6] outline-none truncate min-w-0 w-full"
                     />
                   </div>
-                  <div className="flex items-center gap-1 text-[10px] text-[#9e9e9e]">
+                  <div className="ai-artboard-row-actions flex items-center gap-1 text-[10px] text-[#9e9e9e]">
                     <span>
                       {Math.round(ab.width)}×{Math.round(ab.height)}
                     </span>
@@ -529,10 +529,10 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
 
           {/* Active Artboard Size, Preset, Orientation & Rearrange All */}
           {activeArtboard && (
-            <div className="p-2 bg-[#292929] border-t border-[#1a1a1a] space-y-2">
-              <div className="flex items-center justify-between gap-1.5">
-                <span className="text-[10px] text-[#b0b0b0]">Preset:</span>
-                <select
+            <div className="ai-artboard-form p-2 bg-[#292929] border-t border-[#1a1a1a] space-y-2">
+              <div className="ai-form-row">
+                <label htmlFor="artboard-preset" className="ai-form-label">Preset</label>
+                <select id="artboard-preset"
                   onChange={(e) => {
                     const p = ARTBOARD_SIZE_PRESETS[Number(e.target.value)];
                     if (!p) return;
@@ -561,9 +561,9 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                 </select>
               </div>
 
-              <div className="flex items-center justify-between gap-1.5">
+              <div className="ai-form-grid ai-artboard-size-grid">
                 <NumericScrubInput
-                  label="W:"
+                  label="Width:"
                   value={activeArtboard.width}
                   unit={unit}
                   min={10}
@@ -579,7 +579,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                   }
                 />
                 <NumericScrubInput
-                  label="H:"
+                  label="Height:"
                   value={activeArtboard.height}
                   unit={unit}
                   min={10}
@@ -594,6 +594,9 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                     }, 'Artboard Height')
                   }
                 />
+              </div>
+              <div className="ai-form-row">
+                <span className="ai-form-label">Orientation</span>
                 <button
                   onClick={() =>
                     updateDocument((d) => {
@@ -612,14 +615,14 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                   className="ai-btn text-[10px] px-1.5"
                   title="Toggle Portrait / Landscape Orientation"
                 >
-                  {activeArtboard.orientation === 'portrait' ? '▯ Port' : '▭ Land'}
+                  {activeArtboard.orientation === 'portrait' ? 'Portrait' : 'Landscape'}
                 </button>
               </div>
 
               {/* Rearrange All Artboards & Fit to Artwork Bounds */}
-              <div className="flex items-center justify-between gap-1 pt-1 border-t border-[#222]">
+              <div className="ai-form-grid pt-1 border-t border-[#222]">
                 <NumericScrubInput
-                  label="Cols:"
+                  label="Columns:"
                   value={rearrangeCols}
                   min={1}
                   max={12}
@@ -637,6 +640,8 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                   compact
                   onChange={setRearrangeSpacing}
                 />
+              </div>
+              <div className="ai-artboard-actions">
                 <button
                   onClick={handleRearrangeAllArtboards}
                   className="ai-btn text-[10px]"
@@ -646,7 +651,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-1">
+              <div className="ai-artboard-actions">
                 <button
                   onClick={() => handleFitArtboardToArtwork(false)}
                   className="ai-btn text-[10px]"
@@ -893,7 +898,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
                     }}
                   />
                 </div>
-                <span className="text-[#888]">⛓</span>
+                <Link2 size={14} className="text-[#888]" aria-hidden="true" />
                 {/* Opacity Mask Thumbnail */}
                 <div
                   className={`w-10 h-10 rounded border flex items-center justify-center ${
@@ -1030,7 +1035,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-[#b0b0b0] w-16">Threshold:</span>
               <input
-                type="range"
+                type="range" aria-label="Threshold"
                 min={1}
                 max={255}
                 value={traceOpts.threshold}
@@ -1052,7 +1057,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-[#b0b0b0] w-16">Colors:</span>
               <input
-                type="range"
+                type="range" aria-label="Colors"
                 min={2}
                 max={64}
                 value={traceOpts.colors}
@@ -1083,7 +1088,7 @@ export const ArtboardsAssetHistoryInfoPanel: React.FC<
               <div key={sl.key} className="flex items-center gap-2">
                 <span className="text-[10px] text-[#b0b0b0] w-14">{sl.label}</span>
                 <input
-                  type="range"
+                  type="range" aria-label={sl.label.replace(':', '')}
                   min={sl.min}
                   max={sl.max}
                   value={traceOpts[sl.key]}

@@ -1,3 +1,4 @@
+import { ChevronRight, X, Plus, Lock, Check } from 'lucide-react';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useStudioStore } from '../../state/useStudioStore';
@@ -1084,10 +1085,10 @@ export const TopMenuBar: React.FC = () => {
                       className="ai-dropdown-item" onMouseEnter={e => setSubmenu({ label: item.label, items: item.children, anchor: e.currentTarget })}
                       onClick={e => setSubmenu({ label: item.label, items: item.children, anchor: e.currentTarget })}
                       onKeyDown={e => { if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSubmenu({ label: item.label, items: item.children, anchor: e.currentTarget }); requestAnimationFrame(() => submenuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()); } }}>
-                      <span className="ai-dropdown-label">{item.label}</span><span aria-hidden="true">▸</span>
+                      <span className="ai-dropdown-label">{item.label}</span><ChevronRight size={14} aria-hidden="true" />
                     </button> : <button key={item.label} type="button" role="menuitem" className="ai-dropdown-item" disabled={item.disabled}
                       onMouseEnter={() => setSubmenu(null)} onClick={item.onClick}>
-                      {item.checked && <span className="ai-menu-check">✓</span>}
+                      {item.checked && <span className="ai-menu-check"><Check size={13} aria-hidden="true" /></span>}
                       <span className="ai-dropdown-label" title={item.label}>{item.label}</span>
                       {item.shortcut && <span className="ai-shortcut">{item.shortcut}</span>}
                     </button>
@@ -1203,7 +1204,7 @@ export const TopMenuBar: React.FC = () => {
                 {ws.label}
               </option>
             ))}
-            <option value="reset">↺ Reset Workspace</option>
+            <option value="reset">Reset Workspace</option>
           </select>
         </div>
       </header>
@@ -1219,7 +1220,7 @@ export const TopMenuBar: React.FC = () => {
           }
         }}>
         {submenu.items.map(item => <button key={item.label} type="button" role="menuitem" className="ai-dropdown-item" disabled={item.disabled} onClick={item.onClick}>
-          {item.checked && <span className="ai-menu-check">✓</span>}
+          {item.checked && <span className="ai-menu-check"><Check size={13} aria-hidden="true" /></span>}
           <span className="ai-dropdown-label" title={item.label}>{item.label}</span>{item.shortcut && <span className="ai-shortcut">{item.shortcut}</span>}
         </button>)}
       </div>, document.body)}
@@ -1276,7 +1277,7 @@ export const TopMenuBar: React.FC = () => {
                     lineHeight: 1,
                   }}
                 >
-                  ×
+                  <X size={13} aria-hidden="true" />
                 </button>
               )}
             </div>
@@ -1291,7 +1292,7 @@ export const TopMenuBar: React.FC = () => {
           onClick={() => openModal('new-document')}
           style={{ width: 20, height: 20, marginBottom: 2 }}
         >
-          +
+          <Plus size={14} aria-hidden="true" />
         </button>
 
         {/* Isolation Mode Breadcrumb Indicator */}
@@ -1310,7 +1311,7 @@ export const TopMenuBar: React.FC = () => {
               fontWeight: 600,
             }}
           >
-            <span>🔒 Isolation Mode: &lt;Group&gt;</span>
+            <Lock size={13} aria-hidden="true" /><span>Isolation Mode: &lt;Group&gt;</span>
             <button
               type="button"
               onClick={() => {

@@ -368,7 +368,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
           </div>
 
           {/* Size, Leading, Kerning, Tracking */}
-          <div className="grid grid-cols-2 gap-x-2 gap-y-1.5 pt-1 border-t border-[#222222]">
+          <div className="ai-form-grid pt-1 border-t border-[#222222]">
             <NumericScrubInput
               label="Size:"
               value={currentStyle.fontSize}
@@ -409,7 +409,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
           </div>
 
           {/* Vertical/Horizontal Scale, Baseline Shift, Character Rotation */}
-          <div className="grid grid-cols-2 gap-x-2 gap-y-1.5 pt-1 border-t border-[#222222]">
+          <div className="ai-form-grid pt-1 border-t border-[#222222]">
             <NumericScrubInput
               label="V-Scale:"
               value={currentStyle.verticalScale}
@@ -532,13 +532,13 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
             <span className="block text-[10px] text-[#b0b0b0] mb-1">Alignment & Justification:</span>
             <div className="grid grid-cols-7 gap-1">
               {[
-                { id: 'left' as const, align: 'left' as const, title: 'Align Left', lbl: '⫷' },
-                { id: 'center' as const, align: 'center' as const, title: 'Align Center', lbl: '⫿' },
-                { id: 'right' as const, align: 'right' as const, title: 'Align Right', lbl: '⫸' },
-                { id: 'justify-left' as const, align: 'justify' as const, title: 'Justify with Last Line Aligned Left', lbl: '☰L' },
-                { id: 'justify-center' as const, align: 'justify' as const, title: 'Justify with Last Line Aligned Center', lbl: '☰C' },
-                { id: 'justify-right' as const, align: 'justify' as const, title: 'Justify with Last Line Aligned Right', lbl: '☰R' },
-                { id: 'justify-all' as const, align: 'justify' as const, title: 'Justify All Lines', lbl: '☰A' },
+                { id: 'left' as const, align: 'left' as const, title: 'Align Left', Icon: AlignLeft },
+                { id: 'center' as const, align: 'center' as const, title: 'Align Center', Icon: AlignCenter },
+                { id: 'right' as const, align: 'right' as const, title: 'Align Right', Icon: AlignRight },
+                { id: 'justify-left' as const, align: 'justify' as const, title: 'Justify with Last Line Aligned Left', Icon: AlignJustify, suffix: 'L' },
+                { id: 'justify-center' as const, align: 'justify' as const, title: 'Justify with Last Line Aligned Center', Icon: AlignJustify, suffix: 'C' },
+                { id: 'justify-right' as const, align: 'justify' as const, title: 'Justify with Last Line Aligned Right', Icon: AlignJustify, suffix: 'R' },
+                { id: 'justify-all' as const, align: 'justify' as const, title: 'Justify All Lines', Icon: AlignJustify, suffix: 'A' },
               ].map((b) => {
                 const isSelected =
                   justifyMode === b.id ||
@@ -550,14 +550,14 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
                       setJustifyMode(b.id);
                       updateTextStyle({ align: b.align }, `Paragraph Align: ${b.title}`);
                     }}
-                    title={b.title}
+                    title={b.title} aria-label={b.title} aria-pressed={isSelected}
                     className={`h-6 rounded text-[10px] border flex items-center justify-center ${
                       isSelected
                         ? 'bg-[#1473e6] border-[#1473e6] text-white'
                         : 'bg-[#292929] border-[#1a1a1a]'
                     }`}
                   >
-                    {b.lbl}
+                    <b.Icon size={14} aria-hidden="true" />{b.suffix && <span className="ai-paragraph-suffix">{b.suffix}</span>}
                   </button>
                 );
               })}
@@ -565,7 +565,7 @@ export const TypographyPanel: React.FC<TypographyPanelProps> = ({
           </div>
 
           {/* Left / Right / First-Line Indents & Space Before / After */}
-          <div className="grid grid-cols-2 gap-x-2 gap-y-1.5 pt-1 border-t border-[#222222]">
+          <div className="ai-form-grid pt-1 border-t border-[#222222]">
             <NumericScrubInput
               label="Left Indent:"
               value={currentStyle.indentLeft}

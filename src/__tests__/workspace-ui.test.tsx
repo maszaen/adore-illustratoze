@@ -326,3 +326,148 @@ it('keeps toolbar ordering separate across workspaces', async () => {
   expect(host.querySelectorAll('.ai-tool-grid button')[1].getAttribute('aria-label')).toBe(label);
   act(() => root.unmount()); host.remove();
 });
+
+it('moves individual tabs between docked and floating groups without duplicates and persists them', async () => {
+  const { DockManager } = await import('../components/workspace/DockManager');
+  localStorage.clear(); useStudioStore.setState({ activeWorkspace: 'essentials', hideAllPanels: false, screenMode: 'normal' });
+  const host = document.createElement('div'); document.body.appendChild(host); let root = createRoot(host);
+  act(() => root.render(<DockManager renderPanel={id => <span>{id}</span>}><div>Canvas</div></DockManager>));
+  const original = document.elementFromPoint; const originalAll = document.elementsFromPoint;
+  let hit: Element | null = null;
+  document.elementFromPoint = () => hit; document.elementsFromPoint = () => hit ? [hit] : [];
+  const drag = (el: Element, target: Element | null) => {
+    hit = target;
+    act(() => el.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 })));
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { clientX: 150, clientY: 150 })));
+    act(() => window.dispatchEvent(new MouseEvent('pointerup', { clientX: 150, clientY: 150 })));
+  };
+  try {
+    drag(host.querySelector('[data-dock-tab="layers"]')!, null);
+    const floating = host.querySelector<HTMLElement>('[data-floating-id]')!;
+    expect(floating.querySelector('[data-dock-tab="layers"]')).not.toBeNull();
+    drag(host.querySelector('[data-dock-tab="artboards"]')!, floating.querySelector('[data-dock-tab="layers"]'));
+    expect(floating.querySelectorAll('[data-dock-tab]')).toHaveLength(2);
+    drag(floating.querySelector('[data-dock-tab="layers"]')!, host.querySelector('[data-dock-tab="properties"]'));
+    expect(floating.querySelectorAll('[data-dock-tab]')).toHaveLength(1);
+    expect(host.querySelector('[data-dock-tab="properties"]')!.closest('[data-dock-group]')!.querySelector('[data-dock-tab="layers"]')).not.toBeNull();
+    expect(host.querySelectorAll('[data-dock-tab="layers"]')).toHaveLength(1);
+    act(() => root.unmount()); root = createRoot(host);
+    act(() => root.render(<DockManager renderPanel={id => <span>{id}</span>}><div>Canvas</div></DockManager>));
+    expect(host.querySelector('[data-floating-id] [data-dock-tab="artboards"]')).not.toBeNull();
+    expect(host.querySelectorAll('[data-dock-tab="layers"]')).toHaveLength(1);
+  } finally { document.elementFromPoint = original; document.elementsFromPoint = originalAll; act(() => root.unmount()); host.remove(); }
+});
+
+it('shows dock feedback only near a canvas edge and uses it as the drop target', async () => {
+  const { DockManager } = await import('../components/workspace/DockManager');
+  localStorage.clear(); useStudioStore.setState({ activeWorkspace: 'essentials', hideAllPanels: false, screenMode: 'normal' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<DockManager renderPanel={id => <span>{id}</span>}><div>Canvas</div></DockManager>));
+  const canvas = host.querySelector<HTMLElement>('.ai-workspace-canvas')!;
+  canvas.getBoundingClientRect = () => ({ left:100, right:900, top:100, bottom:700, width:800, height:600, x:100, y:100, toJSON:()=>({}) });
+  const original = document.elementFromPoint; const originalAll = document.elementsFromPoint;
+  document.elementFromPoint = () => canvas; document.elementsFromPoint = () => [canvas];
+  try {
+    const tab = host.querySelector('[data-dock-tab="properties"]')!;
+    act(() => tab.dispatchEvent(new MouseEvent('pointerdown', { bubbles:true, button:0, clientX:20, clientY:20 })));
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { clientX:500, clientY:400 })));
+    expect(host.querySelector('.ai-dock-drop')).toBeNull();
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { clientX:110, clientY:400 })));
+    expect(host.querySelector('.ai-dock-drop-left.active')).not.toBeNull();
+    act(() => window.dispatchEvent(new MouseEvent('pointerup', { clientX:110, clientY:400 })));
+    expect(host.querySelector('[aria-label="Left dock"] [data-dock-tab="properties"]')).not.toBeNull();
+    expect(host.querySelector('.ai-dock-drop')).toBeNull();
+  } finally { document.elementFromPoint = original; document.elementsFromPoint = originalAll; act(() => root.unmount()); host.remove(); }
+});
+
+it('reorders floating tabs and restores a moved floating group on Escape', async () => {
+  const { DockManager } = await import('../components/workspace/DockManager');
+  localStorage.clear(); useStudioStore.setState({ activeWorkspace: 'essentials', hideAllPanels: false, screenMode: 'normal' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<DockManager renderPanel={id => <span>{id}</span>}><div>Canvas</div></DockManager>));
+  const original = document.elementFromPoint, originalAll = document.elementsFromPoint;
+  let hit: Element | null = null; document.elementFromPoint = () => hit; document.elementsFromPoint = () => hit ? [hit] : [];
+  const down = (el:Element) => act(() => el.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true,button:0,clientX:10,clientY:10})));
+  const move = () => act(() => window.dispatchEvent(new MouseEvent('pointermove',{clientX:120,clientY:120})));
+  const up = () => act(() => window.dispatchEvent(new MouseEvent('pointerup',{clientX:120,clientY:120})));
+  try {
+    down(host.querySelector('[aria-label="Drag Layers panel group"]')!); move(); up();
+    const float = host.querySelector<HTMLElement>('[data-floating-id]')!;
+    const layers = float.querySelector('[data-dock-tab="layers"]')!;
+    const artboards = float.querySelector('[data-dock-tab="artboards"]')!;
+    hit = layers; down(artboards); move(); up();
+    expect(Array.from(float.querySelectorAll('[data-dock-tab]')).map(el => el.getAttribute('data-dock-tab'))).toEqual(['artboards', 'layers']);
+    const before = [float.style.left, float.style.top]; hit = null;
+    down(float.querySelector('.ai-floating-grip')!); move();
+    expect(float.style.left).not.toBe(before[0]);
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})));
+    expect([float.style.left, float.style.top]).toEqual(before);
+    expect(host.querySelector('.ai-panel-drag-preview')).toBeNull();
+  } finally { document.elementFromPoint=original; document.elementsFromPoint=originalAll; act(()=>root.unmount()); host.remove(); }
+});
+
+it('anchors an opened collapsed panel directly to its own dock strip', async () => {
+  const { DockManager } = await import('../components/workspace/DockManager');
+  localStorage.clear(); useStudioStore.setState({ activeWorkspace: 'essentials-classic', hideAllPanels: false, screenMode: 'normal' });
+  const host=document.createElement('div');document.body.appendChild(host);const root=createRoot(host);
+  act(()=>root.render(<DockManager renderPanel={id => <span>Panel: {id}</span>}><div>Canvas</div></DockManager>));
+  const inner=host.querySelector<HTMLButtonElement>('[data-dock-tab="pathfinder"]')!;
+  act(()=>inner.click());
+  let flyout=host.querySelector<HTMLElement>('[data-panel-flyout]')!;
+  expect(flyout.parentElement).toBe(inner.parentElement);
+  expect(flyout.style.right).toBe('100%');
+  expect(flyout.textContent).toContain('Panel: pathfinder');
+  expect(inner.getAttribute('aria-expanded')).toBe('true');
+  act(()=>inner.click());expect(host.querySelector('[data-panel-flyout]')).toBeNull();
+  const collapse=host.querySelector<HTMLButtonElement>('[title="Collapse Column to Icons (>>)"]')!;
+  act(()=>collapse.click());
+  const outer=host.querySelector<HTMLButtonElement>('[data-dock-tab="layers"]')!;
+  act(()=>outer.click());
+  flyout=host.querySelector<HTMLElement>('[data-panel-flyout]')!;
+  expect(flyout.parentElement).toBe(outer.parentElement);
+  expect(flyout.style.right).toBe('100%');
+  expect(flyout.textContent).toContain('Panel: layers');
+  act(()=>root.unmount());host.remove();
+});
+
+it('resizes the outer dock from its accessible boundary and persists its width', async () => {
+  const { DockManager } = await import('../components/workspace/DockManager');
+  const { readDockWorkspace } = await import('../components/workspace/workspaceStorage');
+  localStorage.clear();
+  useStudioStore.setState({ activeWorkspace: 'essentials', hideAllPanels: false, screenMode: 'normal' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  act(() => root.render(<DockManager renderPanel={id => <span>{id}</span>} />));
+  const handle = host.querySelector<HTMLElement>('[aria-label="Resize outer right panel column"]')!;
+  const column = host.querySelector<HTMLElement>('[data-dock-column-width="rightOuter"]')!;
+  expect(handle.nextElementSibling).toBe(column);
+  const initial = parseFloat(column.style.width);
+  act(() => handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 500 })));
+  act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 460 })));
+  act(() => window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 460 })));
+  expect(parseFloat(column.style.width)).toBe(initial + 40);
+  expect(readDockWorkspace('essentials')?.rightOuterWidth).toBe(initial + 40);
+  act(() => handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
+  expect(parseFloat(column.style.width)).toBe(initial + 30);
+  act(() => root.unmount()); host.remove();
+});
+
+it('previews preset and custom document proportions across categories and orientation', async () => {
+  const { StudioModals } = await import('../components/modals/StudioModals');
+  useStudioStore.setState({ activeModal: 'new-document' });
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host);
+  await act(async () => root.render(<StudioModals />));
+  const page = () => host.querySelector<HTMLElement>('.ai-document-preview .ai-artboard-preview-page')!;
+  expect(parseFloat(page().style.width)).toBeGreaterThan(parseFloat(page().style.height));
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Portrait"]')!.click());
+  expect(parseFloat(page().style.height)).toBeGreaterThan(parseFloat(page().style.width));
+  for (const category of ['Mobile', 'Web', 'Print', 'Film & Video', 'Art & Illustration']) {
+    const button = [...host.querySelectorAll<HTMLButtonElement>('.ai-new-document-categories button')].find(b => b.textContent?.toLowerCase() === category.toLowerCase())!;
+    act(() => button.click());
+    const cards = host.querySelectorAll('.ai-new-document-presets .ai-preset-card');
+    expect(cards.length).toBeGreaterThan(0);
+    expect(host.querySelectorAll('.ai-new-document-presets .ai-artboard-preview-page')).toHaveLength(cards.length);
+    act(() => (cards[0] as HTMLButtonElement).click());
+    expect(cards[0].getAttribute('aria-pressed')).toBe('true');
+  }
+  act(() => root.unmount()); host.remove(); useStudioStore.setState({ activeModal: null });
+});
