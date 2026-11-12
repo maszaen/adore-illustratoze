@@ -1,4 +1,5 @@
-import { layoutText, textGlyphTransform } from '../math/textLayout';
+import { blendIntermediateNodes } from '../math/blend';
+import { clipsTextToFrame, layoutText, pointTextPaintBounds, textGlyphTransform } from '../math/textLayout';
 import type {
   ArtboardItem,
   ExportAssetItem,
@@ -150,7 +151,7 @@ export function renderDocumentToCanvas(
     if (!node || !node.visible || node.isGuide) return;
     if (
       allowedSet &&
-      !allowedSet.has(node.id) &&
+      !allowedSet.has(node.id) && !allowedSet.has(node.parentId || '') &&
       (!node.children || !node.children.some((c) => allowedSet.has(c)))
     ) {
       return;
@@ -168,6 +169,15 @@ export function renderDocumentToCanvas(
       ctx.translate(cx, cy);
       ctx.rotate((node.rotation * Math.PI) / 180);
       ctx.translate(-cx, -cy);
+    }
+
+    if (node.type === 'blend' && node.children?.length === 2) {
+      const endpoints = node.children.map(id => nodesMap[id]);
+      if (endpoints.every(Boolean)) {
+        [endpoints[0], ...blendIntermediateNodes(node, nodesMap), endpoints[1]].forEach(drawNode);
+      }
+      ctx.restore();
+      return;
     }
 
     if (node.children && node.children.length > 0) {
@@ -194,7 +204,9 @@ export function renderDocumentToCanvas(
 
     if (node.type === 'text') {
       const layout = layoutText(node);
-      ctx.beginPath(); ctx.rect(node.x, node.y, Math.max(0, node.width), Math.max(0, node.height)); ctx.clip();
+      if (clipsTextToFrame(node)) {
+        ctx.beginPath(); ctx.rect(node.x, node.y, Math.max(0, node.width), Math.max(0, node.height)); ctx.clip();
+      }
       const glyph = textGlyphTransform(node);
       ctx.transform(glyph.sx, 0, 0, glyph.sy, glyph.tx, glyph.ty);
       const ff = node.textStyle?.fontFamily ?? 'Inter, sans-serif';
@@ -388,12 +400,15 @@ export function exportAssetToDataUrl(
   format: RasterFormat = 'png'
 ): string {
   const targetNode = doc.nodes?.[asset.sourceNodeId];
-  const cropBounds = targetNode
+  const bounds = targetNode?.type === 'text' && !clipsTextToFrame(targetNode)
+    ? pointTextPaintBounds(targetNode)
+    : targetNode;
+  const cropBounds = bounds
     ? {
-        x: targetNode.x - 4,
-        y: targetNode.y - 4,
-        width: Math.max(8, targetNode.width + 8),
-        height: Math.max(8, targetNode.height + 8),
+        x: bounds.x - 4,
+        y: bounds.y - 4,
+        width: Math.max(8, bounds.width + 8),
+        height: Math.max(8, bounds.height + 8),
       }
     : undefined;
 

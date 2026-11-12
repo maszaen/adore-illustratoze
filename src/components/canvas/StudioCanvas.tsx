@@ -1,7 +1,11 @@
+import { createGridAnchors } from '../../core/math/gridShapes';
+import { blendIntermediateNodes } from '../../core/math/blend';
+import { collectSnapTargets, movingSelectionBounds, snapMove, type SnapTargets } from '../../core/math/snapping';
+import { rotateNodeAround } from '../../core/math/selectionRotate';
 import { cornerDragRadius, toggleCornerSelection } from '../../core/math/liveCorners';
 import { DEFAULT_TEXT_STYLE } from '../panels/TypographyPanel';
 import { canReflectVector, getSelectionResize, resizeVectorNode, selectionNodeBounds } from '../../core/math/selectionResize';
-import { fitPointTextFrame, layoutText, textGlyphTransform } from '../../core/math/textLayout';
+import { clipsTextToFrame, fitPointTextFrame, layoutText, textGlyphTransform } from '../../core/math/textLayout';
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useStudioStore } from '../../state/useStudioStore';
 import {
@@ -32,6 +36,7 @@ import { PerspectiveGridOverlay } from './PerspectiveGridOverlay';
 import type {
   AnchorPoint,
   ArtboardItem,
+  BoundingBox,
   FillItem,
   Point2D,
   StrokeItem,
@@ -74,6 +79,7 @@ export const StudioCanvas: React.FC = () => {
   const [viewportSize, setViewportSize] = useState({ width: 1400, height: 900 });
   const [cursorCanvasPos, setCursorCanvasPos] = useState<Point2D>({ x: 0, y: 0 });
   const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef<{ screenX: number; screenY: number; panX: number; panY: number } | null>(
     null
@@ -93,6 +99,8 @@ export const StudioCanvas: React.FC = () => {
     | null
     | {
         type: 'move-nodes';
+        initialBounds: BoundingBox | null;
+        snapTargets: SnapTargets;
         startCanvas: Point2D;
         initialNodes: Record<string, VectorNode>;
         duplicated: boolean;
@@ -201,6 +209,9 @@ export const StudioCanvas: React.FC = () => {
   // Movable Transform Origin Pin for Rotate (R), Scale (S), Reflect (O), Shear
   const [transformOrigin, setTransformOrigin] = useState<Point2D | null>(null);
 
+  const selectionKey = selectedIds.join('\u0000');
+  useEffect(() => { setTransformOrigin(null); }, [selectionKey, activeTool]);
+
   // Inline Text Editing State
   const [editingTextNodeId, setEditingTextNodeId] = useState<string | null>(null);
   const [editingTextValue, setEditingTextValue] = useState('');
@@ -253,6 +264,16 @@ export const StudioCanvas: React.FC = () => {
           store.updateDocument(draft => { for (const [id, node] of Object.entries(dragAction.initialNodes)) draft.nodes[id] = structuredClone(node); }, 'Cancel Corners', { silent: true });
           useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
           setDragAction(null);
+        }
+        if (dragAction?.type === 'rotate-bbox' || (dragAction?.type === 'transform-tool-drag' && dragAction.mode === 'rotate')) {
+          store.updateDocument(draft => { for (const [id, original] of Object.entries(dragAction.initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original); }, 'Cancel Rotation', { silent: true });
+          useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Rotation cancelled' });
+          setDragAction(null);
+        }
+        if (dragAction?.type === 'move-nodes') {
+          store.updateDocument(draft => { for (const [id, original] of Object.entries(dragAction.initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original); }, 'Cancel Move', { silent: true });
+          useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Move cancelled' });
+          setSmartSnap(null); setDragAction(null);
         }
         if (dragAction?.type === 'resize-bbox') {
           store.updateDocument(draft => {
@@ -330,70 +351,17 @@ export const StudioCanvas: React.FC = () => {
     [panX, panY, zoom]
   );
 
-  // Snap point to Grid or Smart Guides
-  const applySnapping = useCallback(
-    (pt: Point2D, excludeIds: string[] = []): Point2D => {
-      let x = pt.x;
-      let y = pt.y;
-      let nextSnap: SmartGuideSnap | null = null;
-
-      if (snapToGrid) {
-        const step = 10;
-        x = Math.round(x / step) * step;
-        y = Math.round(y / step) * step;
-      }
-
-      if (showSmartGuides) {
-        const threshold = 6 / zoom;
-        const candidates: { x: number; y: number; label: string }[] = [];
-
-        for (const ab of doc.artboards) {
-          candidates.push(
-            { x: ab.x, y: ab.y, label: 'artboard' },
-            { x: ab.x + ab.width / 2, y: ab.y + ab.height / 2, label: 'center' },
-            { x: ab.x + ab.width, y: ab.y + ab.height, label: 'artboard' }
-          );
-        }
-
-        for (const node of Object.values(doc.nodes)) {
-          if (!node.visible || node.locked || excludeIds.includes(node.id)) continue;
-          const cx = node.x + node.width / 2;
-          const cy = node.y + node.height / 2;
-          candidates.push({ x: cx, y: cy, label: 'center' });
-          candidates.push({ x: node.x, y: node.y, label: 'bounds' });
-          candidates.push({ x: node.x + node.width, y: node.y + node.height, label: 'bounds' });
-          for (const ap of node.points || []) {
-            candidates.push({ x: ap.x, y: ap.y, label: 'anchor' });
-          }
-        }
-
-        for (const cand of candidates) {
-          if (Math.abs(cand.x - x) <= threshold && nextSnap?.x === undefined) {
-            x = cand.x;
-            nextSnap = {
-              ...(nextSnap || {}),
-              x: cand.x,
-              labelX: cand.label,
-              lineX: { x: cand.x, y1: Math.min(y, cand.y) - 180, y2: Math.max(y, cand.y) + 180 },
-            };
-          }
-          if (Math.abs(cand.y - y) <= threshold && nextSnap?.y === undefined) {
-            y = cand.y;
-            nextSnap = {
-              ...(nextSnap || {}),
-              y: cand.y,
-              labelY: cand.label,
-              lineY: { y: cand.y, x1: Math.min(x, cand.x) - 180, x2: Math.max(x, cand.x) + 180 },
-            };
-          }
-        }
-      }
-
-      setSmartSnap(nextSnap);
-      return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 };
-    },
-    [snapToGrid, showSmartGuides, zoom, doc.artboards, doc.nodes]
-  );
+  // Point snapping is used for placement/anchor editing; selection movement
+  // uses the moving object's bounds instead of the pointer location.
+  const applySnapping = useCallback((pt: Point2D, excludeIds: string[] = []): Point2D => {
+    const artboard = doc.artboards.find(ab => ab.id === doc.activeArtboardId) || doc.artboards[0];
+    const targets = showSmartGuides ? collectSnapTargets(doc, excludeIds, store.showGuides) : { x: [], y: [] };
+    const result = snapMove({ x:pt.x, y:pt.y, width:0, height:0 }, {x:0,y:0}, targets, {
+      zoom, smart:showSmartGuides, grid:snapToGrid, gridOrigin: {x:artboard?.x ?? 0, y:artboard?.y ?? 0},
+    });
+    setSmartSnap(result.guide);
+    return { x: pt.x + result.delta.x, y: pt.y + result.delta.y };
+  }, [snapToGrid, showSmartGuides, zoom, doc, store.showGuides]);
 
   // Combined selection bounding box (computed freshly on every render so dragging/resizing updates live)
   const selectionBounds = (() => {
@@ -407,7 +375,7 @@ export const StudioCanvas: React.FC = () => {
     const includeNodeBounds = (nid: string) => {
       const n = doc.nodes[nid];
       if (!n || !n.visible) return;
-      if ((n.type === 'group' || n.type === 'clipping-group') && n.children?.length) {
+      if ((n.type === 'group' || n.type === 'clipping-group' || n.type === 'blend') && n.children?.length) {
         for (const cid of n.children) {
           includeNodeBounds(cid);
         }
@@ -705,9 +673,11 @@ export const StudioCanvas: React.FC = () => {
         return;
       }
 
+      if (selectedIds.length === 0) return;
       if (!transformOrigin) {
-        setTransformOrigin(pos);
+        setTransformOrigin(origin);
       }
+      e.currentTarget.setPointerCapture(e.pointerId);
 
       const initialNodes = collectTargetAndDescendantNodes(selectedIds, doc.nodes);
       store.beginTransaction(`Transform (${activeTool})`);
@@ -937,9 +907,7 @@ export const StudioCanvas: React.FC = () => {
 
     // Symbol Sprayer & Symbolism Tools (Shift+S)
     if (activeTool.startsWith('symbol-')) {
-      if (activeTool === 'symbol-sprayer') {
-        store.placeSymbolInstance(store.activeSymbolId, pos.x - 32, pos.y - 32);
-      }
+      if (activeTool === 'symbol-sprayer') svgRef.current?.setPointerCapture(e.pointerId);
       setDragAction({
         type: 'freehand',
         tool: activeTool,
@@ -1021,12 +989,20 @@ export const StudioCanvas: React.FC = () => {
 
     switch (dragAction.type) {
       case 'move-nodes': {
-        const snapped = applySnapping(rawPos, Object.keys(dragAction.initialNodes));
-        let dx = snapped.x - dragAction.startCanvas.x;
-        let dy = snapped.y - dragAction.startCanvas.y;
-        if (e.shiftKey) {
-          if (Math.abs(dx) > Math.abs(dy)) dy = 0;
-          else dx = 0;
+        let dx = rawPos.x - dragAction.startCanvas.x;
+        let dy = rawPos.y - dragAction.startCanvas.y;
+        const axis = e.shiftKey ? (Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y') : 'both';
+        if (axis === 'x') dy = 0;
+        if (axis === 'y') dx = 0;
+        if (dragAction.initialBounds && Math.hypot(dx, dy) * zoom >= 0.5) {
+          const artboard = doc.artboards.find(ab => ab.id === doc.activeArtboardId) || doc.artboards[0];
+          const result = snapMove(dragAction.initialBounds, { x:dx, y:dy }, dragAction.snapTargets, {
+            zoom, smart:showSmartGuides, grid:snapToGrid, axis, gridOrigin:{x:artboard?.x ?? 0, y:artboard?.y ?? 0},
+          });
+          dx = result.delta.x; dy = result.delta.y;
+          setSmartSnap(result.guide);
+        } else {
+          setSmartSnap(null);
         }
 
         store.updateDocument(
@@ -1034,8 +1010,8 @@ export const StudioCanvas: React.FC = () => {
             for (const [id, initNode] of Object.entries(dragAction.initialNodes)) {
               const liveNode = targetDoc.nodes[id];
               if (!liveNode || liveNode.locked) continue;
-              liveNode.x = Math.round((initNode.x + dx) * 100) / 100;
-              liveNode.y = Math.round((initNode.y + dy) * 100) / 100;
+              liveNode.x = initNode.x + dx;
+              liveNode.y = initNode.y + dy;
               liveNode.points = (initNode.points || []).map((pt) => ({
                 ...pt,
                 x: pt.x + dx,
@@ -1075,7 +1051,7 @@ export const StudioCanvas: React.FC = () => {
           break;
         }
         let transform = getSelectionResize(initialBounds, handle, delta, e.shiftKey);
-        const canReflect = Object.values(initialNodes).every(n => canReflectVector(n) || (n.type === 'text' && n.textStyle?.typeMode === 'point') || n.type === 'group' || n.type === 'clipping-group');
+        const canReflect = Object.values(initialNodes).every(n => canReflectVector(n) || (n.type === 'text' && n.textStyle?.typeMode === 'point') || n.type === 'group' || n.type === 'clipping-group' || n.type === 'blend');
         if (!canReflect && (transform.scaleX <= 0 || transform.scaleY <= 0)) {
           // Area text, images and other special renderers do not yet support reflection.
           transform = { ...transform, scaleX: Math.max(0.001, transform.scaleX), scaleY: Math.max(0.001, transform.scaleY) };
@@ -1123,37 +1099,12 @@ export const StudioCanvas: React.FC = () => {
         if (e.shiftKey) {
           deltaDeg = Math.round(deltaDeg / 45) * 45;
         }
-        const rad = (deltaDeg * Math.PI) / 180;
-        const cos = Math.cos(rad);
-        const sin = Math.sin(rad);
-
-        store.updateDocument(
-          (targetDoc) => {
-            for (const [id, initNode] of Object.entries(initialNodes)) {
-              const liveNode = targetDoc.nodes[id];
-              if (!liveNode || liveNode.locked) continue;
-              liveNode.rotation = Math.round(((initNode.rotation || 0) + deltaDeg) * 10) / 10;
-              if (initNode.points && initNode.points.length > 0) {
-                liveNode.points = initNode.points.map((pt) => {
-                  const rot = (p: Point2D) => ({
-                    x: center.x + (p.x - center.x) * cos - (p.y - center.y) * sin,
-                    y: center.y + (p.x - center.x) * sin + (p.y - center.y) * cos,
-                  });
-                  const np = rot(pt);
-                  return {
-                    ...pt,
-                    x: np.x,
-                    y: np.y,
-                    handleIn: pt.handleIn ? rot(pt.handleIn) : undefined,
-                    handleOut: pt.handleOut ? rot(pt.handleOut) : undefined,
-                  };
-                });
-              }
-            }
-          },
-          'Rotate Selection',
-          { silent: true }
-        );
+        store.updateDocument(targetDoc => {
+          for (const [id, initial] of Object.entries(initialNodes)) {
+            const live = targetDoc.nodes[id];
+            if (live && !live.locked) Object.assign(live, rotateNodeAround(initial, center, deltaDeg));
+          }
+        }, 'Rotate Selection', { silent: true });
         break;
       }
 
@@ -1182,9 +1133,13 @@ export const StudioCanvas: React.FC = () => {
       }
 
       case 'move-anchor': {
-        const snapped = applySnapping(rawPos, [dragAction.nodeId]);
-        const dx = snapped.x - dragAction.startCanvas.x;
-        const dy = snapped.y - dragAction.startCanvas.y;
+        const anchor = dragAction.initialPoints.find(pt => pt.id === dragAction.anchorId);
+        if (!anchor) break;
+        const desired = { x: anchor.x + rawPos.x - dragAction.startCanvas.x, y: anchor.y + rawPos.y - dragAction.startCanvas.y };
+        const snapped = Math.hypot(rawPos.x - dragAction.startCanvas.x, rawPos.y - dragAction.startCanvas.y) * zoom >= 0.5
+          ? applySnapping(desired, [dragAction.nodeId]) : desired;
+        const dx = snapped.x - anchor.x;
+        const dy = snapped.y - anchor.y;
         const movingSet = new Set(
           selectedAnchorIds.includes(dragAction.anchorId)
             ? selectedAnchorIds
@@ -1428,14 +1383,10 @@ export const StudioCanvas: React.FC = () => {
               if (mode === 'rotate') {
                 const a0 = Math.atan2(startCanvas.y - origin.y, startCanvas.x - origin.x);
                 const a1 = Math.atan2(rawPos.y - origin.y, rawPos.x - origin.x);
-                const dAngle = a1 - a0;
-                const cos = Math.cos(dAngle);
-                const sin = Math.sin(dAngle);
-                liveNode.points = (initNode.points || []).map((pt) => ({
-                  ...pt,
-                  x: origin.x + (pt.x - origin.x) * cos - (pt.y - origin.y) * sin,
-                  y: origin.y + (pt.x - origin.x) * sin + (pt.y - origin.y) * cos,
-                }));
+                let degrees = (a1 - a0) * 180 / Math.PI;
+                if (e.shiftKey) degrees = Math.round(degrees / 45) * 45;
+                Object.assign(liveNode, rotateNodeAround(initNode, origin, degrees));
+                continue;
               } else if (mode === 'scale' || mode === 'free-transform') {
                 const sx = Math.max(0.1, 1 + dx / 150);
                 const sy = e.shiftKey ? sx : Math.max(0.1, 1 + dy / 150);
@@ -1681,12 +1632,10 @@ export const StudioCanvas: React.FC = () => {
           break;
         case 'rect-grid':
         case 'polar-grid':
-          nodeType = 'rectangle';
+          nodeType = 'path';
           label = shapeTool === 'polar-grid' ? '<Polar Grid>' : '<Rectangular Grid>';
-          points =
-            shapeTool === 'polar-grid'
-              ? createEllipseAnchors(x, y, finalW, finalH)
-              : createRectangleAnchors(x, y, finalW, finalH);
+          points = createGridAnchors(shapeTool, x, y, finalW, finalH);
+          closed = false;
           break;
       }
 
@@ -1702,6 +1651,7 @@ export const StudioCanvas: React.FC = () => {
         cornerRadius,
         sides,
         innerRadius: innerRatio,
+        ...((shapeTool === 'rect-grid' || shapeTool === 'polar-grid') ? { fills: [] } : {}),
       });
 
       store.addNode(newNode, `Draw ${label}`);
@@ -1713,6 +1663,24 @@ export const StudioCanvas: React.FC = () => {
     if (dragAction.type === 'freehand') {
       const { tool, points } = dragAction;
       setDragAction(null);
+      if (tool === 'symbol-sprayer') {
+        if (!doc.symbols.length) return;
+        const placements = [points[0]];
+        let last = points[0];
+        for (const end of points.slice(1)) {
+          let distance = distance2D(last, end);
+          while (distance >= 32 && placements.length < 100) {
+            const t = 32 / distance;
+            last = { x: last.x + (end.x - last.x) * t, y: last.y + (end.y - last.y) * t };
+            placements.push(last);
+            distance = distance2D(last, end);
+          }
+        }
+        store.beginTransaction('Spray Symbols');
+        for (const p of placements) store.placeSymbolInstance(store.activeSymbolId, p.x - 32, p.y - 32);
+        store.commitTransaction();
+        return;
+      }
       if (points.length < 2) return;
 
       if (tool === 'paintbrush' || tool === 'pencil' || tool === 'blob-brush') {
@@ -1807,7 +1775,7 @@ export const StudioCanvas: React.FC = () => {
       setDragAction(null);
       return;
     }
-    if (dragAction.type === 'resize-bbox' && Object.entries(dragAction.initialNodes).every(([id, original]) =>
+    if (((dragAction.type === 'move-nodes' && !dragAction.duplicated) || dragAction.type === 'resize-bbox' || dragAction.type === 'rotate-bbox' || (dragAction.type === 'transform-tool-drag' && dragAction.mode === 'rotate')) && Object.entries(dragAction.initialNodes).every(([id, original]) =>
       JSON.stringify(useStudioStore.getState().getActiveDocument().nodes[id]) === JSON.stringify(original))) {
       useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
       setDragAction(null);
@@ -2000,10 +1968,13 @@ export const StudioCanvas: React.FC = () => {
 
     const latestDoc = useStudioStore.getState().getActiveDocument();
     const initialNodes = collectTargetAndDescendantNodes(moveTargetIds, latestDoc.nodes);
+    svgRef.current?.setPointerCapture(e.pointerId);
     store.beginTransaction(duplicated ? 'Duplicate Selection' : 'Move Selection');
 
     setDragAction({
       type: 'move-nodes',
+      initialBounds: movingSelectionBounds(initialNodes),
+      snapTargets: showSmartGuides ? collectSnapTargets(latestDoc, Object.keys(initialNodes), store.showGuides) : { x: [], y: [] },
       startCanvas: rawPos,
       initialNodes,
       duplicated,
@@ -2213,7 +2184,7 @@ export const StudioCanvas: React.FC = () => {
     }
 
     // Group / Clipping Group container
-    if (node.type === 'group' || node.type === 'clipping-group') {
+    if (node.type === 'group' || node.type === 'clipping-group' || node.type === 'blend') {
       const children = (node.children || [])
         .map((cid) => doc.nodes[cid])
         .filter(Boolean);
@@ -2228,7 +2199,11 @@ export const StudioCanvas: React.FC = () => {
             store.enterIsolationMode(node.id);
           }}
         >
-          {children.map((ch) => renderVectorNode(ch, layerOutlineMode))}
+          {node.type === 'blend' && children.length === 2 ? <>
+            <g pointerEvents={activeTool === 'direct-select' || activeTool === 'group-select' || isolationGroupId === node.id ? 'auto' : 'none'}>{renderVectorNode(children[0], layerOutlineMode)}</g>
+            <g pointerEvents="none">{blendIntermediateNodes(node, doc.nodes).map(ch => renderVectorNode(ch, layerOutlineMode))}</g>
+            <g pointerEvents={activeTool === 'direct-select' || activeTool === 'group-select' || isolationGroupId === node.id ? 'auto' : 'none'}>{renderVectorNode(children[1], layerOutlineMode)}</g>
+          </> : children.map((ch) => renderVectorNode(ch, layerOutlineMode))}
         </g>
       );
     }
@@ -2518,8 +2493,8 @@ export const StudioCanvas: React.FC = () => {
             height={Math.max(10, node.height)}
             fill="transparent"
           />
-          <defs><clipPath id={`text-frame-${Array.from(node.id).map(c => c.codePointAt(0)!.toString(16)).join('-')}`} clipPathUnits="userSpaceOnUse"><rect x={node.x} y={node.y} width={Math.max(0, node.width)} height={Math.max(0, node.height)} /></clipPath></defs>
-          <g clipPath={`url(#text-frame-${Array.from(node.id).map(c => c.codePointAt(0)!.toString(16)).join('-')})`}>
+          {clipsTextToFrame(node) && <defs><clipPath id={`text-frame-${Array.from(node.id).map(c => c.codePointAt(0)!.toString(16)).join('-')}`} clipPathUnits="userSpaceOnUse"><rect x={node.x} y={node.y} width={Math.max(0, node.width)} height={Math.max(0, node.height)} /></clipPath></defs>}
+          <g clipPath={clipsTextToFrame(node) ? `url(#text-frame-${Array.from(node.id).map(c => c.codePointAt(0)!.toString(16)).join('-')})` : undefined}>
           <g transform={`matrix(${glyph.sx} 0 0 ${glyph.sy} ${glyph.tx} ${glyph.ty})`}>
           {lines.map((line, lIdx) => (
             <text
@@ -2852,13 +2827,31 @@ export const StudioCanvas: React.FC = () => {
         height="100%"
         onPointerDown={handleCanvasPointerDown}
         onPointerMove={handleCanvasPointerMove}
+        onPointerOver={(e) => {
+          const element = (e.target as Element).closest?.('[data-vector-node-id]');
+          const id = element?.getAttribute('data-vector-node-id');
+          const node = id ? doc.nodes[id] : undefined;
+          const layer = node && doc.layers.find(l => l.id === node.layerId);
+          setHoveredNodeId(node && !node.locked && layer?.visible && !layer.locked ? node.id : null);
+        }}
+        onPointerLeave={() => setHoveredNodeId(null)}
         onPointerUp={handleCanvasPointerUp}
         onPointerCancel={() => {
-          if (dragAction?.type === 'draw-text') { setDragAction(null); return; }
+          if (dragAction?.type === 'draw-text' || dragAction?.type === 'freehand' && dragAction.tool === 'symbol-sprayer') { setDragAction(null); return; }
           if (dragAction?.type === 'live-corner') {
             store.updateDocument(draft => { for (const [id, node] of Object.entries(dragAction.initialNodes)) draft.nodes[id] = structuredClone(node); }, 'Cancel Corners', { silent: true });
             useStudioStore.setState({ isTransactionActive: false, transactionLabel: null });
             setDragAction(null); return;
+          }
+          if (dragAction?.type === 'rotate-bbox' || (dragAction?.type === 'transform-tool-drag' && dragAction.mode === 'rotate')) {
+            store.updateDocument(draft => { for (const [id, original] of Object.entries(dragAction.initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original); }, 'Cancel Rotation', { silent: true });
+            useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Rotation cancelled' });
+            setDragAction(null); return;
+          }
+          if (dragAction?.type === 'move-nodes') {
+            store.updateDocument(draft => { for (const [id, original] of Object.entries(dragAction.initialNodes)) if (draft.nodes[id]) draft.nodes[id] = structuredClone(original); }, 'Cancel Move', { silent: true });
+            useStudioStore.setState({ isTransactionActive: false, transactionLabel: null, statusMessage: 'Move cancelled' });
+            setSmartSnap(null); setDragAction(null); return;
           }
           if (dragAction?.type !== 'resize-bbox') return;
           store.updateDocument(draft => {
@@ -3167,6 +3160,7 @@ export const StudioCanvas: React.FC = () => {
                   {/* Selected Path Outline in Layer Color */}
                   <path
                     d={d}
+                    transform={node.rotation ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})` : undefined}
                     fill="none"
                     stroke={layerColor}
                     strokeWidth={(isKeyObject ? 3 : 1.2) / zoom}
@@ -3338,6 +3332,7 @@ export const StudioCanvas: React.FC = () => {
 
                           {/* Anchor Square: Solid when selected, Hollow white when unselected */}
                           <rect
+                            data-anchor-id={pt.id}
                             x={pt.x - size / 2}
                             y={pt.y - size / 2}
                             width={size}
@@ -3431,6 +3426,15 @@ export const StudioCanvas: React.FC = () => {
               );
             })}
 
+          {/* Hover feedback is non-interactive and never exported. */}
+          {showBoundingBox && showEdges && !dragAction && activeTool === 'select' && hoveredNodeId && !selectedIds.includes(hoveredNodeId) && (() => {
+            const node = doc.nodes[hoveredNodeId];
+            if (!node) return null;
+            const bounds = movingSelectionBounds(collectTargetAndDescendantNodes([node.id], doc.nodes));
+            if (!bounds) return null;
+            return <rect data-hover-bounds={node.id} x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} fill="none" stroke={doc.layers.find(l => l.id === node.layerId)?.color || '#4f8cff'} strokeWidth={1 / zoom} pointerEvents="none" />;
+          })()}
+
           {/* 6. Selection Bounding Box & 8 Resize + Rotate Handles (`Shift+Ctrl+B`) */}
           {showBoundingBox &&
             showEdges &&
@@ -3438,12 +3442,13 @@ export const StudioCanvas: React.FC = () => {
             activeTool === 'select' && (
               <g>
                 <rect
+                  data-selection-bounds="true"
                   x={selectionBounds.x}
                   y={selectionBounds.y}
                   width={selectionBounds.width}
                   height={selectionBounds.height}
                   fill="none"
-                  stroke="#4f8cff"
+                  stroke={doc.layers.find(l => l.id === doc.nodes[selectedIds[0]]?.layerId)?.color || '#4f8cff'}
                   strokeWidth={1 / zoom}
                   pointerEvents="none"
                 />
@@ -3454,15 +3459,16 @@ export const StudioCanvas: React.FC = () => {
                   y1={selectionBounds.y}
                   x2={selectionBounds.x + selectionBounds.width / 2}
                   y2={selectionBounds.y - 18 / zoom}
-                  stroke="#4f8cff"
+                  stroke={doc.layers.find(l => l.id === doc.nodes[selectedIds[0]]?.layerId)?.color || '#4f8cff'}
                   strokeWidth={1 / zoom}
                 />
                 <circle
+                  data-rotate-handle="true"
                   cx={selectionBounds.x + selectionBounds.width / 2}
                   cy={selectionBounds.y - 18 / zoom}
                   r={5 / zoom}
                   fill="#ffffff"
-                  stroke="#4f8cff"
+                  stroke={doc.layers.find(l => l.id === doc.nodes[selectedIds[0]]?.layerId)?.color || '#4f8cff'}
                   strokeWidth={1.4 / zoom}
                   style={{ cursor: 'grab' }}
                   onPointerDown={(e) => {
@@ -3475,6 +3481,7 @@ export const StudioCanvas: React.FC = () => {
                     const startAngle =
                       (Math.atan2(p.y - center.y, p.x - center.x) * 180) / Math.PI;
                     const initialNodes = collectTargetAndDescendantNodes(selectedIds, doc.nodes);
+                    svgRef.current?.setPointerCapture(e.pointerId);
                     store.beginTransaction('Rotate Selection');
                     setDragAction({
                       type: 'rotate-bbox',
@@ -3547,7 +3554,7 @@ export const StudioCanvas: React.FC = () => {
                         width={sz}
                         height={sz}
                         fill="#ffffff"
-                        stroke="#4f8cff"
+                        stroke={doc.layers.find(l => l.id === doc.nodes[selectedIds[0]]?.layerId)?.color || '#4f8cff'}
                         strokeWidth={1.4 / zoom}
                       />
                     </g>
@@ -3602,7 +3609,10 @@ export const StudioCanvas: React.FC = () => {
               const h = Math.max(2, Math.abs(currentCanvas.y - startCanvas.y));
               let pts: AnchorPoint[] = [];
               let closed = true;
-              if (shapeTool === 'ellipse' || shapeTool === 'polar-grid') {
+              if (shapeTool === 'rect-grid' || shapeTool === 'polar-grid') {
+                pts = createGridAnchors(shapeTool, x, y, w, h);
+                closed = false;
+              } else if (shapeTool === 'ellipse') {
                 pts = createEllipseAnchors(x, y, w, h);
               } else if (shapeTool === 'polygon') {
                 pts = createPolygonAnchors(x, y, w, h, sides, cornerRadius);
@@ -3741,7 +3751,7 @@ export const StudioCanvas: React.FC = () => {
 
           {/* 12. Smart Guides Magenta Alignment Lines & Labels (`Ctrl+U`) */}
           {smartSnap && (
-            <g pointerEvents="none">
+            <g data-smart-guides="true" pointerEvents="none">
               {smartSnap.lineX && (
                 <>
                   <line

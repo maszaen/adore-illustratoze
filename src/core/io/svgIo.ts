@@ -1,4 +1,5 @@
-import { layoutText, textGlyphTransform } from '../math/textLayout';
+import { blendIntermediateNodes } from '../math/blend';
+import { clipsTextToFrame, layoutText, textGlyphTransform } from '../math/textLayout';
 import type {
   AnchorPoint,
   ArtboardItem,
@@ -91,8 +92,16 @@ export function exportDocumentToSvgString(
 
   const renderNodeElement = (node: VectorNode, indent: string): string => {
     if (!node || !node.visible || node.isGuide) return '';
-    if (allowedIds && !allowedIds.has(node.id) && (!node.children || !node.children.some((c) => allowedIds.has(c)))) {
+    if (allowedIds && !allowedIds.has(node.id) && !allowedIds.has(node.parentId || '') && (!node.children || !node.children.some((c) => allowedIds.has(c)))) {
       return '';
+    }
+
+    if (node.type === 'blend' && node.children?.length === 2) {
+      const endpoints = node.children.map(id => nodesMap[id]);
+      if (endpoints.every(Boolean)) {
+        const parts = [endpoints[0], ...blendIntermediateNodes(node, nodesMap), endpoints[1]];
+        return `${indent}<g opacity="${fmt(node.opacity)}">\n${parts.map(child => renderNodeElement(child, `${indent}  `)).join('\n')}\n${indent}</g>`;
+      }
     }
 
     // If fontMode === 'outline' and node is text, convert to outline group on the fly
@@ -223,15 +232,15 @@ export function exportDocumentToSvgString(
     if (node.type === 'text') {
       const layout = layoutText(node);
       const glyph = textGlyphTransform(node);
-      const clipId = `text_clip_${++textClipCounter}`;
-      defsList.push(`<clipPath id="${clipId}" clipPathUnits="userSpaceOnUse"><rect x="${fmt(node.x)}" y="${fmt(node.y)}" width="${fmt(Math.max(0, node.width))}" height="${fmt(Math.max(0, node.height))}"/></clipPath>`);
+      const clipId = clipsTextToFrame(node) ? `text_clip_${++textClipCounter}` : null;
+      if (clipId) defsList.push(`<clipPath id="${clipId}" clipPathUnits="userSpaceOnUse"><rect x="${fmt(node.x)}" y="${fmt(node.y)}" width="${fmt(Math.max(0, node.width))}" height="${fmt(Math.max(0, node.height))}"/></clipPath>`);
       const ff = node.textStyle?.fontFamily ?? 'Inter, sans-serif';
       const fw = node.textStyle?.fontStyle?.toLowerCase().includes('bold') ? 'bold' : 'normal';
       const italic = node.textStyle?.fontStyle?.toLowerCase().includes('italic') ? ' font-style="italic"' : '';
       const anchor = layout.align === 'center' ? 'middle' : layout.align === 'right' ? 'end' : 'start';
       const decoration = [node.textStyle?.underline && 'underline', node.textStyle?.strikethrough && 'line-through'].filter(Boolean).join(' ');
       const spans = layout.lines.map((line, i) => `<tspan x="${fmt(layout.x)}" y="${fmt(layout.y + i * layout.leading)}">${escapeXml(line)}</tspan>`).join('');
-      return `${indent}<g${transformAttr} clip-path="url(#${clipId})"><text id="${elemId}" transform="matrix(${fmt(glyph.sx)} 0 0 ${fmt(glyph.sy)} ${fmt(glyph.tx)} ${fmt(glyph.ty)})" font-family="${escapeXml(ff)}" font-size="${fmt(layout.fontSize)}" font-weight="${fw}"${italic} text-anchor="${anchor}" letter-spacing="${fmt(layout.letterSpacing)}"${decoration ? ` text-decoration="${decoration}"` : ''}${node.textStyle?.vertical ? ' writing-mode="vertical-rl"' : ''} xml:space="preserve"${styleAttributeStr}>${spans}</text></g>`;
+      return `${indent}<g${transformAttr}${clipId ? ` clip-path="url(#${clipId})"` : ''}><text id="${elemId}" transform="matrix(${fmt(glyph.sx)} 0 0 ${fmt(glyph.sy)} ${fmt(glyph.tx)} ${fmt(glyph.ty)})" font-family="${escapeXml(ff)}" font-size="${fmt(layout.fontSize)}" font-weight="${fw}"${italic} text-anchor="${anchor}" letter-spacing="${fmt(layout.letterSpacing)}"${decoration ? ` text-decoration="${decoration}"` : ''}${node.textStyle?.vertical ? ' writing-mode="vertical-rl"' : ''} xml:space="preserve"${styleAttributeStr}>${spans}</text></g>`;
     }
 
     // Default: <path> using AnchorPoint[] curves (or synthesized rectangle points)
