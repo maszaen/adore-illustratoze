@@ -4,6 +4,8 @@ import { useKeyboardShortcuts } from './core/shortcuts/useKeyboardShortcuts';
 import { HomeDashboard } from './components/home/HomeDashboard';
 import { TopMenuBar } from './components/workspace/TopMenuBar';
 import { ControlBar } from './components/workspace/ControlBar';
+import { useControlBarVisible } from './components/workspace/workspaceChrome';
+import { CanvasContextMenu } from './components/workspace/CanvasContextMenu';
 import { LeftToolbar } from './components/workspace/LeftToolbar';
 import { DockManager } from './components/workspace/DockManager';
 import { BottomStatusBar } from './components/workspace/BottomStatusBar';
@@ -48,6 +50,8 @@ function getImageNaturalDimensions(dataUrl: string): Promise<{ width: number; he
 export const App: React.FC = () => {
   const store = useStudioStore();
   const showHomeScreen = useStudioStore((s) => s.showHomeScreen);
+  const workspace = useStudioStore((s) => s.activeWorkspace);
+  const showControlBar = useControlBarVisible(workspace);
   const uiBrightness: UIThemeBrightness = useStudioStore((s) => s.uiBrightness || 'dark');
   const pasteboardMatchUI = useStudioStore((s) => s.pasteboardMatchUI);
   const activeDocument = useStudioStore((s) => s.documents[s.activeDocumentId] || s.document);
@@ -344,6 +348,7 @@ export const App: React.FC = () => {
 
   // Window Drag-and-Drop Handlers
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer?.types?.includes('Files')) {
@@ -353,6 +358,7 @@ export const App: React.FC = () => {
   };
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) {
@@ -361,6 +367,7 @@ export const App: React.FC = () => {
   };
 
   const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
@@ -370,6 +377,7 @@ export const App: React.FC = () => {
   };
 
   const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;
@@ -486,7 +494,7 @@ export const App: React.FC = () => {
           <TopMenuBar />
 
           {/* Contextual Sub-Header Control Bar */}
-          <ControlBar />
+          {showControlBar && <ControlBar />}
 
           {/* Center Studio Workspace Area: Left Toolbar + Infinite Vector Canvas + Dockable Panels */}
           <div
@@ -501,7 +509,7 @@ export const App: React.FC = () => {
             <LeftToolbar />
 
             <DockManager renderPanel={renderStudioPanel}>
-              <StudioCanvas />
+              <CanvasContextMenu><StudioCanvas /></CanvasContextMenu>
             </DockManager>
           </div>
 

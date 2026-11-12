@@ -17,10 +17,10 @@ interface FloatingToolPalette {
 const TOOLBAR_STORAGE_KEY = 'adore.toolbar.v1';
 interface ToolbarPreferences { columns: 1 | 2; position: { x: number; y: number } | null; order: string[] }
 const defaultOrder = TOOL_GROUPS.map(group => group.id);
-function readToolbarPreferences(): ToolbarPreferences {
+function readToolbarPreferences(workspace: string): ToolbarPreferences {
   const defaults: ToolbarPreferences = { columns: 2, position: null, order: defaultOrder };
   try {
-    const data = JSON.parse(localStorage.getItem(TOOLBAR_STORAGE_KEY) || 'null');
+    const data = JSON.parse(localStorage.getItem(`${TOOLBAR_STORAGE_KEY}.${workspace}`) || localStorage.getItem(TOOLBAR_STORAGE_KEY) || 'null');
     if (!data || !Array.isArray(data.order)) return defaults;
     const known = data.order.filter((id: unknown): id is string => typeof id === 'string' && defaultOrder.includes(id));
     const order = [...new Set<string>(known), ...defaultOrder.filter(id => !known.includes(id))];
@@ -39,7 +39,8 @@ export const LeftToolbar: React.FC = () => {
   const screenMode: ScreenMode = store.screenMode || 'normal';
   const hideAllPanels: boolean = Boolean(store.hideAllPanels);
 
-  const initialPrefs = useRef(readToolbarPreferences());
+  const [toolbarWorkspace, setToolbarWorkspace] = useState<string>(() => store.activeWorkspace || 'essentials-classic');
+  const initialPrefs = useRef(readToolbarPreferences(toolbarWorkspace));
   const [columns, setColumns] = useState<1 | 2>(initialPrefs.current.columns);
   const [toolOrder, setToolOrder] = useState<string[]>(initialPrefs.current.order);
   const [customizing, setCustomizing] = useState(false);
@@ -71,9 +72,10 @@ export const LeftToolbar: React.FC = () => {
   const longPressTimerRef = useRef<number | null>(null);
   const didLongPressRef = useRef(false);
   const [toolbarPosition, setToolbarPosition] = useState<{ x: number; y: number } | null>(initialPrefs.current.position);
+  const [toolbarDockTarget, setToolbarDockTarget] = useState(false);
   useEffect(() => {
-    try { localStorage.setItem(TOOLBAR_STORAGE_KEY, JSON.stringify({ columns, position: toolbarPosition, order: toolOrder })); } catch { /* Storage is optional. */ }
-  }, [columns, toolbarPosition, toolOrder]);
+    try { localStorage.setItem(`${TOOLBAR_STORAGE_KEY}.${toolbarWorkspace}`, JSON.stringify({ columns, position: toolbarPosition, order: toolOrder })); } catch { /* Storage is optional. */ }
+  }, [toolbarWorkspace, columns, toolbarPosition, toolOrder]);
   useEffect(() => {
     const clamp = () => setToolbarPosition(pos => pos ? { x: Math.max(0, Math.min(pos.x, window.innerWidth - 64)), y: Math.max(0, Math.min(pos.y, window.innerHeight - 50)) } : null);
     window.addEventListener('resize', clamp);
@@ -84,15 +86,22 @@ export const LeftToolbar: React.FC = () => {
     e.preventDefault();
     const rect = toolbarRef.current.getBoundingClientRect();
     const startX = e.clientX, startY = e.clientY;
+    let moved = false;
     const move = (event: PointerEvent) => {
+      if (Math.hypot(event.clientX - startX, event.clientY - startY) < 5 && !moved) return;
+      moved = true;
+      setToolbarDockTarget(event.clientX < 36);
       setToolbarPosition({
         x: Math.max(0, Math.min(window.innerWidth - rect.width, rect.left + event.clientX - startX)),
         y: Math.max(0, Math.min(window.innerHeight - Math.min(rect.height, 60), rect.top + event.clientY - startY)),
       });
     };
-    const end = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); };
+    const cleanup = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', cancel); };
+    const end = (event: PointerEvent) => { if (moved && event.clientX < 36) setToolbarPosition(null); setToolbarDockTarget(false); cleanup(); };
+    const cancel = () => { setToolbarDockTarget(false); cleanup(); };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', cancel);
   };
   const toolbarRef = useRef<HTMLDivElement>(null);
 
@@ -111,14 +120,16 @@ export const LeftToolbar: React.FC = () => {
 
   useEffect(() => {
     const reset = (event: Event) => {
-      if ((event as CustomEvent).detail?.reset) {
-        setToolbarPosition(null);
-        setTornOffPalettes([]);
-        setColumns(2);
-        setToolOrder(defaultOrder);
-        setCustomizing(false);
-        store.setToolbarColumns?.(2);
-      }
+      const detail = (event as CustomEvent).detail;
+      if (!detail?.preset) return;
+      setToolbarWorkspace(detail.preset);
+      const prefs = detail.reset ? { columns: 2 as const, position: null, order: defaultOrder } : readToolbarPreferences(detail.preset);
+      setToolbarPosition(prefs.position);
+      setTornOffPalettes([]);
+      setColumns(prefs.columns);
+      setToolOrder(prefs.order);
+      setCustomizing(false);
+      store.setToolbarColumns?.(prefs.columns);
     };
     window.addEventListener('ai-workspace-preset', reset);
     return () => window.removeEventListener('ai-workspace-preset', reset);
@@ -246,6 +257,7 @@ export const LeftToolbar: React.FC = () => {
 
   return (
     <>
+      {toolbarDockTarget && <div className="ai-toolbar-dock-indicator" aria-hidden="true" />}
       <aside
         ref={toolbarRef}
         className={`ai-left-toolbar ${columns === 2 ? 'cols-2' : 'cols-1'}`}

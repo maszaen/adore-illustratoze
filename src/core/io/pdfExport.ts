@@ -1,4 +1,5 @@
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { layoutText, textGlyphTransform } from '../math/textLayout';
+import { PDFDocument, StandardFonts, rgb, pushGraphicsState, popGraphicsState, rectangle, clip, endPath, concatTransformationMatrix } from 'pdf-lib';
 import type { ArtboardItem, StudioDocument, VectorNode } from '../types';
 import { hexToRgb } from '../math/color';
 import { anchorPointsToSvgPathD } from './svgIo';
@@ -101,7 +102,7 @@ export async function exportDocumentToPdfBytes(
   }
   if (orderedRootNodes.length === 0) {
     for (const n of Object.values(nodesMap)) {
-      if (n && n.visible && !n.parentId && !n.isGuide) {
+      if (n && n.visible && !n.parentId && !n.isGuide && !(doc.layers || []).some(layer => layer.nodeIds?.includes(n.id))) {
         orderedRootNodes.push(n);
       }
     }
@@ -166,21 +167,25 @@ export async function exportDocumentToPdfBytes(
         ? (primaryStroke.opacity ?? 1) * (node.opacity ?? 1)
         : 0;
 
-      if (node.type === 'text' && node.textContent) {
-        const fs = Math.max(4, node.textStyle?.fontSize ?? 24);
+      if (node.type === 'text') {
+        const layout = layoutText(node);
         const isBold = node.textStyle?.fontStyle?.toLowerCase().includes('bold');
-        const lines = node.textContent.split(/\r?\n/);
-        const leading = node.textStyle?.leading || fs * 1.2;
-        lines.forEach((line, lineIdx) => {
+        const font = isBold ? helveticaBold : helvetica;
+        page.pushOperators(pushGraphicsState(), rectangle(toPdfX(node.x), toPdfY(node.y + node.height), Math.max(0, node.width), Math.max(0, node.height)), clip(), endPath());
+        const glyph = textGlyphTransform(node);
+        const ax = toPdfX(node.x), ay = toPdfY(node.y);
+        page.pushOperators(concatTransformationMatrix(glyph.sx, 0, 0, glyph.sy,
+          ax * (1 - glyph.sx) + (glyph.sx < 0 ? node.width : 0),
+          ay * (1 - glyph.sy) - (glyph.sy < 0 ? node.height : 0)));
+        if (primaryFill && fillOpacity > 0) layout.lines.forEach((line, lineIdx) => {
+          const textWidth = font.widthOfTextAtSize(line, layout.fontSize);
+          const x = layout.x - (layout.align === 'center' ? textWidth / 2 : layout.align === 'right' ? textWidth : 0);
           page.drawText(line, {
-            x: toPdfX(node.x),
-            y: toPdfY(node.y + fs * 0.85 + lineIdx * leading),
-            size: fs,
-            font: isBold ? helveticaBold : helvetica,
-            color: fillColor || rgb(0, 0, 0),
-            opacity: fillOpacity || 1,
+            x: toPdfX(x), y: toPdfY(layout.y + lineIdx * layout.leading),
+            size: layout.fontSize, font, color: fillColor || rgb(0, 0, 0), opacity: fillOpacity,
           });
         });
+        page.pushOperators(popGraphicsState());
         return;
       }
 

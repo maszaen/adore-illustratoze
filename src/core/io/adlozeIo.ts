@@ -207,24 +207,24 @@ export function mergeAdlozeIntoDocument(
     idMap.set(oldId, `${oldId}${suffix}`);
   }
 
-  const targetLayer =
-    merged.layers.find((l) => l.id === merged.activeLayerId) || merged.layers[0];
-
+  const layerIds = new Map<string, string>();
+  for (const layer of importedDoc.layers || []) {
+    const id = `${layer.id}${suffix}`;
+    layerIds.set(layer.id, id);
+    merged.layers.push({ ...JSON.parse(JSON.stringify(layer)), id,
+      nodeIds: (layer.nodeIds || []).map(oldId => idMap.get(oldId)).filter((nodeId): nodeId is string => !!nodeId) });
+  }
+  const fallbackLayer = merged.layers.find(l => l.id === merged.activeLayerId) || merged.layers[0];
   for (const [oldId, node] of Object.entries(importedDoc.nodes || {})) {
     const newId = idMap.get(oldId)!;
     const clonedNode: VectorNode = JSON.parse(JSON.stringify(node));
     clonedNode.id = newId;
-    clonedNode.layerId = targetLayer ? targetLayer.id : clonedNode.layerId;
-    if (clonedNode.parentId && idMap.has(clonedNode.parentId)) {
-      clonedNode.parentId = idMap.get(clonedNode.parentId);
-    }
-    if (clonedNode.children) {
-      clonedNode.children = clonedNode.children.map((cid) => idMap.get(cid) || cid);
-    }
+    clonedNode.layerId = layerIds.get(node.layerId) || fallbackLayer?.id || node.layerId;
+    if (clonedNode.parentId && idMap.has(clonedNode.parentId)) clonedNode.parentId = idMap.get(clonedNode.parentId);
+    if (clonedNode.children) clonedNode.children = clonedNode.children.map(cid => idMap.get(cid) || cid);
     merged.nodes[newId] = clonedNode;
-    if (!clonedNode.parentId && targetLayer && !targetLayer.nodeIds.includes(newId)) {
-      targetLayer.nodeIds.push(newId);
-    }
+    const layer = merged.layers.find(l => l.id === clonedNode.layerId);
+    if (!clonedNode.parentId && layer && !layer.nodeIds.includes(newId)) layer.nodeIds.push(newId);
   }
 
   // Merge non-duplicate swatches, symbols, and graphic styles

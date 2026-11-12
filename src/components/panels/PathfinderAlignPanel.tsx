@@ -44,6 +44,24 @@ const REF_OFFSETS: { rx: number; ry: number; label: string }[] = [
   { rx: 1, ry: 1, label: 'Bottom Right' },
 ];
 
+/** Distinct visual glyphs for the four shape modes and six Pathfinder operations. */
+const PathfinderGlyph: React.FC<{ op: PathfinderOp }> = ({ op }) => {
+  const a = 'M3 3h10v5H8v5H3z';
+  const b = 'M8 8h10v10H8z';
+  return <svg aria-hidden="true" width="18" height="18" viewBox="0 0 21 21" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+    {op === 'unite' && <path d="M3 3h10v5h5v10H8v-5H3z" fill="currentColor" />}
+    {op === 'minus-front' && <><path d={a} fill="currentColor" /><path d={b} strokeDasharray="2 1" /></>}
+    {op === 'intersect' && <><path d="M3 3h10v10H3zM8 8h10v10H8z" strokeDasharray="2 1" /><path d="M8 8h5v5H8z" fill="currentColor" /></>}
+    {op === 'exclude' && <><path d={a} fill="currentColor"/><path d="M13 8h5v10H8v-5h5z" fill="currentColor"/><path d="M8 8h5v5H8z" strokeDasharray="2 1" /></>}
+    {op === 'divide' && <><path d={a} fill="currentColor" opacity=".5"/><path d={b} /><path d="M8 8h5v5H8z" fill="currentColor" /></>}
+    {op === 'trim' && <><path d={a} fill="currentColor" opacity=".5"/><path d={b} fill="currentColor" /></>}
+    {op === 'merge' && <><path d="M3 3h10v5h5v10H8v-5H3z" fill="currentColor" opacity=".7"/><path d="M8 8h5v5H8z" /></>}
+    {op === 'crop' && <><path d="M8 8h10v10H8z" strokeDasharray="2 1"/><path d="M8 8h5v5H8z" fill="currentColor" /></>}
+    {op === 'outline' && <><path d="M3 3h10v10H3zM8 8h10v10H8z"/><path d="M8 8h5v5H8z" strokeDasharray="1 1"/></>}
+    {op === 'minus-back' && <><path d="M3 3h10v10H3z" strokeDasharray="2 1"/><path d="M13 8h5v10H8v-5h5z" fill="currentColor"/></>}
+  </svg>;
+};
+
 export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
   initialTab = 'pathfinder',
   showTabs = true,
@@ -157,86 +175,15 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
       return;
     }
 
-    if (typeof store.runPathfinder === 'function' && !isAltCompound) {
-      store.runPathfinder(op, false);
-      return;
-    }
-
-    if (isAltCompound) {
-      // Non-Destructive Compound Shape!
-      const compoundId = `compound-shape-${Date.now()}`;
-      const top = selectedNodes[selectedNodes.length - 1];
-      updateDocument((d, s) => {
-        const compoundNode: VectorNode = {
-          id: compoundId,
-          name: `<Compound Shape> (${op})`,
-          type: 'compound-shape',
-          layerId: top.layerId,
-          visible: true,
-          locked: false,
-          x: selectionBounds.x,
-          y: selectionBounds.y,
-          width: selectionBounds.width,
-          height: selectionBounds.height,
-          rotation: 0,
-          points: top.points || [],
-          closed: true,
-          fills: JSON.parse(JSON.stringify(top.fills || [])),
-          strokes: JSON.parse(JSON.stringify(top.strokes || [])),
-          effects: [],
-          opacity: top.opacity ?? 1,
-          blendMode: top.blendMode ?? 'normal',
-          compoundMode: op,
-          children: [...selectedIds],
-        };
-        selectedIds.forEach((cid) => {
-          if (d.nodes[cid]) d.nodes[cid].parentId = compoundId;
-        });
-        d.nodes[compoundId] = compoundNode;
-        const layer = (d.layers || []).find((l: any) => l.id === top.layerId);
-        if (layer && Array.isArray(layer.nodeIds)) {
-          layer.nodeIds = [
-            compoundId,
-            ...layer.nodeIds.filter((id: string) => !selectedIds.includes(id)),
-          ];
-        }
-        s.selectedIds = [compoundId];
-        s.selectedNodeIds = [compoundId];
-      }, `Create Compound Shape (${op})`);
-      setStatusNote(`Created Non-Destructive Compound Shape (${op}). Click Expand to commit.`);
-      setTimeout(() => setStatusNote(null), 3000);
-      return;
-    }
-
-    // Destructive Boolean Pathfinder
-    const resultNodes = performPathfinder(selectedNodes, op);
-    if (!resultNodes || resultNodes.length === 0) {
-      setStatusNote('Pathfinder operation produced an empty intersection.');
-      setTimeout(() => setStatusNote(null), 2500);
-      return;
-    }
-
-    updateDocument((d, s) => {
-      const targetLayerId = selectedNodes[selectedNodes.length - 1].layerId;
-      selectedIds.forEach((id) => {
-        delete d.nodes[id];
-      });
-      const newIds: string[] = [];
-      resultNodes.forEach((rn) => {
-        rn.layerId = targetLayerId;
-        d.nodes[rn.id] = rn;
-        newIds.push(rn.id);
-      });
-      const layer = (d.layers || []).find((l: any) => l.id === targetLayerId);
-      if (layer && Array.isArray(layer.nodeIds)) {
-        layer.nodeIds = [
-          ...newIds,
-          ...layer.nodeIds.filter((id: string) => !selectedIds.includes(id)),
-        ];
+    if (typeof store.runPathfinder === 'function') {
+      store.runPathfinder(op, isAltCompound);
+      const message = useStudioStore.getState().statusMessage;
+      if (message) {
+        setStatusNote(message);
+        setTimeout(() => setStatusNote(null), 3000);
       }
-      s.selectedIds = newIds;
-      s.selectedNodeIds = newIds;
-    }, `Pathfinder: ${op}`);
+    }
+
   };
 
   const handleExpandCompoundShape = () => {
@@ -553,7 +500,7 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[10px] text-[#b0b0b0] font-semibold">
-                Shape Modes <span className="font-normal text-[#888]">(Alt+Click = Compound Shape)</span>
+                Shape Modes
               </span>
               <button
                 onClick={handleExpandCompoundShape}
@@ -564,74 +511,13 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
                 Expand
               </button>
             </div>
-            <div className="grid grid-cols-4 gap-1.5">
-              {[
-                { op: 'unite' as PathfinderOp, label: 'Unite', icon: '⊞' },
-                { op: 'minus-front' as PathfinderOp, label: 'Minus Front', icon: '⊟' },
-                { op: 'intersect' as PathfinderOp, label: 'Intersect', icon: '⊡' },
-                { op: 'exclude' as PathfinderOp, label: 'Exclude', icon: '⊠' },
-              ].map((item) => (
-                <button
-                  key={item.op}
-                  onClick={(e) => handlePathfinderClick(item.op, e)}
-                  title={`${item.label} (Hold Alt for Non-Destructive Compound Shape)`}
-                  className="flex flex-col items-center justify-center py-2 px-1 rounded bg-[#292929] hover:bg-[#1473e6] border border-[#1a1a1a] transition-colors group"
-                >
-                  <svg width="20" height="20" viewBox="0 0 22 22" className="mb-1">
-                    {item.op === 'unite' && (
-                      <>
-                        <rect x="3" y="3" width="11" height="11" fill="currentColor" opacity="0.85" />
-                        <rect x="8" y="8" width="11" height="11" fill="currentColor" opacity="0.85" />
-                      </>
-                    )}
-                    {item.op === 'minus-front' && (
-                      <>
-                        <rect x="3" y="3" width="11" height="11" fill="currentColor" />
-                        <rect
-                          x="8"
-                          y="8"
-                          width="11"
-                          height="11"
-                          fill="#292929"
-                          stroke="currentColor"
-                          strokeWidth="1.4"
-                        />
-                      </>
-                    )}
-                    {item.op === 'intersect' && (
-                      <>
-                        <rect
-                          x="3"
-                          y="3"
-                          width="11"
-                          height="11"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeDasharray="2 1"
-                        />
-                        <rect
-                          x="8"
-                          y="8"
-                          width="11"
-                          height="11"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeDasharray="2 1"
-                        />
-                        <rect x="8" y="8" width="6" height="6" fill="currentColor" />
-                      </>
-                    )}
-                    {item.op === 'exclude' && (
-                      <>
-                        <rect x="3" y="3" width="11" height="11" fill="currentColor" />
-                        <rect x="8" y="8" width="11" height="11" fill="currentColor" />
-                        <rect x="8" y="8" width="6" height="6" fill="#292929" />
-                      </>
-                    )}
-                  </svg>
-                  <span className="text-[9px] text-[#cfcfcf] group-hover:text-white">
-                    {item.label}
-                  </span>
+            <div className="ai-pathfinder-icons ai-pathfinder-shapes">
+              {([
+                ['unite', 'Unite'], ['minus-front', 'Minus Front'], ['intersect', 'Intersect'], ['exclude', 'Exclude'],
+              ] as [PathfinderOp, string][]).map(([op, label]) => (
+                <button type="button" key={op} aria-label={label} title={`${label} (live compound shape not yet supported)`}
+                  onClick={event => handlePathfinderClick(op, event)} className="ai-pathfinder-icon">
+                  <PathfinderGlyph op={op} />
                 </button>
               ))}
             </div>
@@ -644,43 +530,12 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
             <span className="block text-[10px] text-[#b0b0b0] font-semibold mb-1.5">
               Pathfinders:
             </span>
-            <div className="grid grid-cols-6 gap-1">
-              {[
-                { op: 'divide' as PathfinderOp, label: 'Divide' },
-                { op: 'trim' as PathfinderOp, label: 'Trim' },
-                { op: 'merge' as PathfinderOp, label: 'Merge' },
-                { op: 'crop' as PathfinderOp, label: 'Crop' },
-                { op: 'outline' as PathfinderOp, label: 'Outline' },
-                { op: 'minus-back' as PathfinderOp, label: 'Minus Back' },
-              ].map((item) => (
-                <button
-                  key={item.op}
-                  onClick={(e) => handlePathfinderClick(item.op, e)}
-                  title={item.label}
-                  className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded bg-[#292929] hover:bg-[#1473e6] border border-[#1a1a1a] transition-colors"
-                >
-                  <svg width="16" height="16" viewBox="0 0 18 18" className="mb-0.5">
-                    <rect
-                      x="2"
-                      y="2"
-                      width="9"
-                      height="9"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.3"
-                    />
-                    <rect
-                      x="7"
-                      y="7"
-                      width="9"
-                      height="9"
-                      fill="currentColor"
-                      fillOpacity={item.op === 'outline' ? 0 : 0.45}
-                      stroke="currentColor"
-                      strokeWidth="1.3"
-                    />
-                  </svg>
-                  <span className="text-[8px] truncate w-full text-center">{item.label}</span>
+            <div className="ai-pathfinder-icons">
+              {([
+                ['divide', 'Divide'], ['trim', 'Trim'], ['merge', 'Merge'], ['crop', 'Crop'], ['outline', 'Outline'], ['minus-back', 'Minus Back'],
+              ] as [PathfinderOp, string][]).map(([op, label]) => (
+                <button type="button" key={op} aria-label={label} title={label} onClick={event => handlePathfinderClick(op, event)} className="ai-pathfinder-icon">
+                  <PathfinderGlyph op={op} />
                 </button>
               ))}
             </div>
@@ -693,7 +548,7 @@ export const PathfinderAlignPanel: React.FC<PathfinderAlignPanelProps> = ({
             <span className="block text-[10px] text-[#b0b0b0] font-semibold mb-1.5">
               Path Operations:
             </span>
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="ai-pathfinder-actions">
               <button
                 disabled={!primaryNode}
                 onClick={() => {

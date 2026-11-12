@@ -103,6 +103,8 @@ export interface BoundingBox {
 
 export interface AnchorPoint {
   id: string;
+  /** Starts a new closed contour within a multi-contour path. */
+  moveTo?: boolean;
   x: number;
   y: number;
   handleIn?: { x: number; y: number };
@@ -272,6 +274,8 @@ export interface TextStyle {
   pathFlip?: boolean;
   pathEffect?: 'rainbow' | 'skew' | 'ribbon' | 'stair' | 'gravity';
   threadedNextNodeId?: string;
+  /** Wrap text inside an area frame; distinct from wrapping around an object. */
+  wrapInFrame?: boolean;
   textWrap?: boolean;
   textWrapOffset?: number;
   touchTransforms?: CharacterTouchTransform[];
@@ -336,6 +340,9 @@ export interface VectorNode {
   fillRule?: 'nonzero' | 'evenodd';
   children?: string[];
   compoundMode?: 'unite' | 'minus-front' | 'intersect' | 'exclude';
+  /** Affine glyph scale for point text (signed to preserve reflection). */
+  textScaleX?: number;
+  textScaleY?: number;
   textContent?: string;
   textStyle?: TextStyle;
   imageUrl?: string;

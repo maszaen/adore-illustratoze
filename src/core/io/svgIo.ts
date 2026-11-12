@@ -1,3 +1,4 @@
+import { layoutText, textGlyphTransform } from '../math/textLayout';
 import type {
   AnchorPoint,
   ArtboardItem,
@@ -72,6 +73,7 @@ export function exportDocumentToSvgString(
   const cssRules: string[] = [];
   let minimalIdCounter = 1;
   let classCounter = 1;
+  let textClipCounter = 0;
 
   const formatObjectId = (rawName: string, fallbackId: string): string => {
     if (opts.objectIds === 'minimal') {
@@ -214,15 +216,22 @@ export function exportDocumentToSvgString(
       return `${indent}<ellipse id="${elemId}" cx="${fmt(cx)}" cy="${fmt(cy)}" rx="${fmt(rx)}" ry="${fmt(ry)}"${transformAttr}${styleAttributeStr}/>`;
     }
 
+    if (node.type === 'image' && node.imageUrl) {
+      return `${indent}<image id="${elemId}" x="${fmt(node.x)}" y="${fmt(node.y)}" width="${fmt(node.width)}" height="${fmt(node.height)}" href="${escapeXml(node.imageUrl)}" preserveAspectRatio="none"${transformAttr}${node.opacity < 1 ? ` opacity="${fmt(node.opacity)}"` : ''}/>`;
+    }
+
     if (node.type === 'text') {
-      const content = escapeXml(node.textContent ?? 'Text');
-      const fs = node.textStyle?.fontSize ?? 24;
+      const layout = layoutText(node);
+      const glyph = textGlyphTransform(node);
+      const clipId = `text_clip_${++textClipCounter}`;
+      defsList.push(`<clipPath id="${clipId}" clipPathUnits="userSpaceOnUse"><rect x="${fmt(node.x)}" y="${fmt(node.y)}" width="${fmt(Math.max(0, node.width))}" height="${fmt(Math.max(0, node.height))}"/></clipPath>`);
       const ff = node.textStyle?.fontFamily ?? 'Inter, sans-serif';
       const fw = node.textStyle?.fontStyle?.toLowerCase().includes('bold') ? 'bold' : 'normal';
-      const fsItalic = node.textStyle?.fontStyle?.toLowerCase().includes('italic')
-        ? ' font-style="italic"'
-        : '';
-      return `${indent}<text id="${elemId}" x="${fmt(node.x)}" y="${fmt(node.y + fs * 0.85)}" font-family="${escapeXml(ff)}" font-size="${fmt(fs)}" font-weight="${fw}"${fsItalic}${transformAttr}${styleAttributeStr}>${content}</text>`;
+      const italic = node.textStyle?.fontStyle?.toLowerCase().includes('italic') ? ' font-style="italic"' : '';
+      const anchor = layout.align === 'center' ? 'middle' : layout.align === 'right' ? 'end' : 'start';
+      const decoration = [node.textStyle?.underline && 'underline', node.textStyle?.strikethrough && 'line-through'].filter(Boolean).join(' ');
+      const spans = layout.lines.map((line, i) => `<tspan x="${fmt(layout.x)}" y="${fmt(layout.y + i * layout.leading)}">${escapeXml(line)}</tspan>`).join('');
+      return `${indent}<g${transformAttr} clip-path="url(#${clipId})"><text id="${elemId}" transform="matrix(${fmt(glyph.sx)} 0 0 ${fmt(glyph.sy)} ${fmt(glyph.tx)} ${fmt(glyph.ty)})" font-family="${escapeXml(ff)}" font-size="${fmt(layout.fontSize)}" font-weight="${fw}"${italic} text-anchor="${anchor}" letter-spacing="${fmt(layout.letterSpacing)}"${decoration ? ` text-decoration="${decoration}"` : ''}${node.textStyle?.vertical ? ' writing-mode="vertical-rl"' : ''} xml:space="preserve"${styleAttributeStr}>${spans}</text></g>`;
     }
 
     // Default: <path> using AnchorPoint[] curves (or synthesized rectangle points)
@@ -263,7 +272,7 @@ export function exportDocumentToSvgString(
   // Also include any root nodes not referenced in layer.nodeIds
   if (layerBlocks.length === 0) {
     const loose = Object.values(nodesMap)
-      .filter((n) => !n.parentId && n.visible)
+      .filter((n) => !n.parentId && n.visible && !(doc.layers || []).some(layer => layer.nodeIds?.includes(n.id)))
       .map((n) => renderNodeElement(n, '  '))
       .filter(Boolean);
     if (loose.length > 0) {
@@ -305,6 +314,14 @@ export function anchorPointsToSvgPathD(
   fmt: (n: number) => string = (n) => `${Math.round(n * 100) / 100}`
 ): string {
   if (!points || points.length === 0) return '';
+  if (points.slice(1).some(point => point.moveTo)) {
+    const contours: AnchorPoint[][] = [];
+    for (const point of points) {
+      if (!contours.length || point.moveTo) contours.push([]);
+      contours[contours.length - 1].push(point);
+    }
+    return contours.map(contour => anchorPointsToSvgPathD(contour.map(point => ({ ...point, moveTo: false })), closed, fmt)).join(' ');
+  }
   const parts: string[] = [`M ${fmt(points[0].x)} ${fmt(points[0].y)}`];
 
   for (let i = 1; i < points.length; i++) {
@@ -452,7 +469,7 @@ export function parseSvgStringToVectorNodes(
                   fills: [],
                   strokes: [],
                   effects: [],
-                  opacity: parseFloat(el.getAttribute('opacity') || '1') || 1,
+                  opacity: Number(el.getAttribute('opacity') ?? '1'),
                   blendMode: 'normal',
                   children: childIds,
                 };
@@ -533,7 +550,7 @@ function elementToVectorNode(
   const fillColor = getStyleOrAttr('fill', tag === 'line' || tag === 'polyline' ? 'none' : '#000000');
   const strokeColor = getStyleOrAttr('stroke', 'none');
   const strokeWidth = parseFloat(getStyleOrAttr('stroke-width', '1')) || 1;
-  const opacity = parseFloat(getStyleOrAttr('opacity', '1')) || 1;
+  const opacity = Number(getStyleOrAttr('opacity', '1'));
 
   if (tag === 'rect') {
     const x = parseFloat(el.getAttribute('x') || '0') || 0;
@@ -564,8 +581,8 @@ function elementToVectorNode(
   }
 
   if (tag === 'circle' || tag === 'ellipse') {
-    const cx = parseFloat(el.getAttribute('cx') || '50') || 50;
-    const cy = parseFloat(el.getAttribute('cy') || '50') || 50;
+    const cx = Number(el.getAttribute('cx') ?? '0');
+    const cy = Number(el.getAttribute('cy') ?? '0');
     const rx =
       tag === 'circle'
         ? parseFloat(el.getAttribute('r') || '50') || 50
@@ -732,7 +749,7 @@ function elementToVectorNode(
     const d = el.getAttribute('d') || '';
     const parsed = parseSvgPathDToAnchorPoints(d);
     if (parsed.points.length === 0) return null;
-    return createImportedVectorNode({
+    const node = createImportedVectorNode({
       name: rawId || '<Path>',
       type: 'path',
       layerId,
@@ -745,6 +762,8 @@ function elementToVectorNode(
       strokeWidth,
       opacity,
     });
+    if (getStyleOrAttr('fill-rule') === 'evenodd') node.fillRule = 'evenodd';
+    return node;
   }
 
   return null;
@@ -793,6 +812,7 @@ export function parseSvgPathDToAnchorPoints(d: string): {
         startY = cy;
         points.push({
           id: `pt-${points.length + 1}-${Math.random().toString(36).slice(2, 6)}`,
+          moveTo: points.length > 0,
           x: cx,
           y: cy,
           pointType: 'corner',

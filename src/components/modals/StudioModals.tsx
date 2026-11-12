@@ -3053,6 +3053,7 @@ export const StudioModals: React.FC = () => {
                     blendMode: 'normal',
                   } as VectorNode);
 
+                try {
                 const res = await traceImageNodeToVectorNodes(targetNode, {
                   preset: tracePreset,
                   mode: traceMode,
@@ -3076,6 +3077,9 @@ export const StudioModals: React.FC = () => {
                   }
                 }, 'Image Trace & Expand');
                 closeModal();
+                } catch (error) {
+                  store.setStatusMessage(error instanceof Error ? error.message : 'Image Trace failed.');
+                }
               }}
               style={primaryBtnStyle}
             >

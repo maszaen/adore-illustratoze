@@ -1,3 +1,4 @@
+import { layoutText, textGlyphTransform } from '../math/textLayout';
 import type {
   ArtboardItem,
   ExportAssetItem,
@@ -139,7 +140,7 @@ export function renderDocumentToCanvas(
   }
   if (orderedRootNodes.length === 0) {
     for (const n of Object.values(nodesMap)) {
-      if (n && n.visible && !n.parentId && !n.isGuide) {
+      if (n && n.visible && !n.parentId && !n.isGuide && !(doc.layers || []).some(layer => layer.nodeIds?.includes(n.id))) {
         orderedRootNodes.push(n);
       }
     }
@@ -191,23 +192,25 @@ export function renderDocumentToCanvas(
       ctx.shadowOffsetY = Number(shadowFx.params?.offsetY ?? 4);
     }
 
-    if (node.type === 'text' && node.textContent) {
-      const fs = node.textStyle?.fontSize ?? 24;
+    if (node.type === 'text') {
+      const layout = layoutText(node);
+      ctx.beginPath(); ctx.rect(node.x, node.y, Math.max(0, node.width), Math.max(0, node.height)); ctx.clip();
+      const glyph = textGlyphTransform(node);
+      ctx.transform(glyph.sx, 0, 0, glyph.sy, glyph.tx, glyph.ty);
       const ff = node.textStyle?.fontFamily ?? 'Inter, sans-serif';
       const isBold = node.textStyle?.fontStyle?.toLowerCase().includes('bold');
       const isItalic = node.textStyle?.fontStyle?.toLowerCase().includes('italic');
-      ctx.font = `${isItalic ? 'italic ' : ''}${isBold ? 'bold ' : ''}${fs}px ${ff}`;
-      ctx.textBaseline = 'top';
-
+      ctx.font = `${isItalic ? 'italic ' : ''}${isBold ? 'bold ' : ''}${layout.fontSize}px ${ff}`;
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = layout.align;
+      if ('letterSpacing' in ctx) (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${layout.letterSpacing}px`;
       const primaryFill = (node.fills || []).find((f) => f.visible && f.type !== 'none');
-      if (primaryFill) {
-        ctx.fillStyle = primaryFill.color || '#000000';
-        const lines = node.textContent.split(/\r?\n/);
-        const leading = node.textStyle?.leading || fs * 1.2;
-        lines.forEach((line, idx) => {
-          ctx.fillText(line, node.x, node.y + idx * leading);
-        });
-      }
+      const stroke = (node.strokes || []).find((item) => item.visible && item.weight > 0);
+      layout.lines.forEach((line, idx) => {
+        const y = layout.y + idx * layout.leading;
+        if (primaryFill) { ctx.save(); ctx.globalAlpha *= primaryFill.opacity ?? 1; ctx.fillStyle = primaryFill.color || '#000000'; ctx.fillText(line, layout.x, y); ctx.restore(); }
+        if (stroke) { ctx.save(); ctx.globalAlpha *= stroke.opacity ?? 1; ctx.strokeStyle = stroke.color || '#000000'; ctx.lineWidth = stroke.weight; ctx.strokeText(line, layout.x, y); ctx.restore(); }
+      });
       ctx.restore();
       return;
     }

@@ -1,5 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useStudioStore } from '../../state/useStudioStore';
+import { useControlBarVisible, setControlBarVisible, resetWorkspaceChrome } from './workspaceChrome';
 import type {
   ActiveModalType,
   UIThemeBrightness,
@@ -44,6 +46,28 @@ export const STUDIO_PANEL_LIST = [
   { id: 'history', label: 'History', shortcut: '' },
 ] as const;
 
+type MenuCommand = { label: string; shortcut?: string; disabled?: boolean; checked?: boolean; onClick: () => void };
+type MenuEntry = { divider: true } | MenuCommand;
+type MenuNode = MenuEntry | { label: string; children: MenuCommand[] };
+
+/** Group the existing commands without changing their handlers or availability. */
+function nestMenuItems(items: MenuEntry[]): MenuNode[] {
+  const result: MenuNode[] = [];
+  const groups = new Map<string, { label: string; children: MenuCommand[] }>();
+  for (const item of items) {
+    if ('divider' in item) { result.push(item); continue; }
+    const normalized = item.label.replace(/^Workspace: /, 'Workspace > ').replace(/^Document Color Mode: /, 'Document Color Mode > ');
+    const split = normalized.indexOf(' > ');
+    if (split < 0 && item.label !== 'Reset Current Workspace') { result.push(item); continue; }
+    const parent = split < 0 ? 'Workspace' : normalized.slice(0, split);
+    const label = split < 0 ? item.label : normalized.slice(split + 3);
+    let group = groups.get(parent);
+    if (!group) { group = { label: parent, children: [] }; groups.set(parent, group); result.push(group); }
+    group.children.push({ ...item, label });
+  }
+  return result;
+}
+
 export const TopMenuBar: React.FC = () => {
   const store = useStudioStore() as any;
 
@@ -59,6 +83,7 @@ export const TopMenuBar: React.FC = () => {
   const uiTheme: UIThemeBrightness = store.uiBrightness || store.uiTheme || 'dark';
   const language: Language = store.language || 'en';
   const activeWorkspace: string = store.activeWorkspace || 'essentials-classic';
+  const controlBarVisible = useControlBarVisible(activeWorkspace);
   const viewMode: string = store.viewMode || 'preview';
   const screenMode: string = store.screenMode || 'normal';
   const showRulers: boolean = store.showRulers ?? true;
@@ -77,6 +102,8 @@ export const TopMenuBar: React.FC = () => {
   const isolatedGroupId: string | null = store.isolatedGroupId || store.isolationGroupId || null;
 
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [submenu, setSubmenu] = useState<{ label: string; items: MenuCommand[]; anchor: HTMLElement } | null>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const placeInputRef = useRef<HTMLInputElement>(null);
@@ -88,13 +115,55 @@ export const TopMenuBar: React.FC = () => {
 
   useEffect(() => {
     const handlePointerDown = (e: MouseEvent) => {
-      if (menuBarRef.current && !menuBarRef.current.contains(e.target as Node)) {
-        setOpenMenu(null);
+      if (menuBarRef.current && !menuBarRef.current.contains(e.target as Node) && !submenuRef.current?.contains(e.target as Node)) {
+        setOpenMenu(null); setSubmenu(null);
       }
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => window.removeEventListener('pointerdown', handlePointerDown);
   }, []);
+
+  useLayoutEffect(() => {
+    const menu = menuBarRef.current?.querySelector<HTMLElement>('.ai-menubar-dropdown');
+    if (!menu) return;
+    const fit = () => {
+      menu.style.left = '0px';
+      menu.style.width = 'max-content';
+      const contentWidth = Math.max(228, ...Array.from(menu.querySelectorAll<HTMLElement>('.ai-dropdown-item')).map(item => {
+        const label = item.querySelector<HTMLElement>('.ai-dropdown-label');
+        const shortcut = item.querySelector<HTMLElement>('.ai-shortcut');
+        return (label?.scrollWidth || 0) + (shortcut?.scrollWidth || 0) + 56;
+      }));
+      menu.style.width = `${contentWidth}px`;
+      const rect = menu.getBoundingClientRect();
+      menu.style.left = `${-Math.max(0, rect.right - window.innerWidth + 6)}px`;
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [openMenu]);
+  useLayoutEffect(() => {
+    const menu = submenuRef.current;
+    if (!menu || !submenu) return;
+    const fit = () => {
+      menu.style.width = 'max-content';
+      const contentWidth = Math.max(200, ...Array.from(menu.querySelectorAll<HTMLElement>('.ai-dropdown-item')).map(item => (item.querySelector<HTMLElement>('.ai-dropdown-label')?.scrollWidth || 0) + (item.querySelector<HTMLElement>('.ai-shortcut')?.scrollWidth || 0) + 56));
+      menu.style.width = `${contentWidth}px`;
+      const anchor = submenu.anchor.getBoundingClientRect();
+      const width = menu.offsetWidth;
+      const height = menu.offsetHeight;
+      menu.style.left = `${Math.max(4, anchor.right + width <= window.innerWidth - 4 ? anchor.right - 1 : anchor.left - width + 1)}px`;
+      menu.style.top = `${Math.max(4, Math.min(anchor.top, window.innerHeight - height - 4))}px`;
+    };
+    fit(); window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [submenu]);
+  useEffect(() => {
+    if (!openMenu) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (submenu) { submenu.anchor.focus(); setSubmenu(null); } else setOpenMenu(null); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [openMenu, submenu]);
 
   if (screenMode === 'fullscreen') {
     return null;
@@ -102,6 +171,7 @@ export const TopMenuBar: React.FC = () => {
 
   const closeMenuAndRun = (fn: () => void) => {
     setOpenMenu(null);
+    setSubmenu(null);
     fn();
   };
 
@@ -195,6 +265,7 @@ export const TopMenuBar: React.FC = () => {
 
   const handleSwitchWorkspace = (wsId: string) => {
     if (wsId === 'reset') {
+      resetWorkspaceChrome(activeWorkspace);
       if (typeof store.resetWorkspace === 'function') {
         store.resetWorkspace();
       }
@@ -570,8 +641,8 @@ export const TopMenuBar: React.FC = () => {
         },
         { divider: true },
         {
-          label: 'Convert Point Type ↔ Area Type',
-          disabled: !hasSelection,
+          label: 'Convert Point Type ↔ Area Type (fixed at creation)',
+          disabled: true,
           onClick: () => triggerStoreAction(['toggleTextTypeMode']),
         },
         { divider: true },
@@ -921,6 +992,8 @@ export const TopMenuBar: React.FC = () => {
           onClick: () => closeMenuAndRun(() => handleSwitchWorkspace('reset')),
         },
         { divider: true as const },
+        { label: 'Control', checked: controlBarVisible, onClick: () => closeMenuAndRun(() => setControlBarVisible(activeWorkspace, !controlBarVisible)) },
+        { divider: true as const },
         ...STUDIO_PANEL_LIST.map((p) => ({
           label: p.label,
           shortcut: p.shortcut || undefined,
@@ -987,44 +1060,37 @@ export const TopMenuBar: React.FC = () => {
               <button
                 type="button"
                 className={`ai-menu-trigger ${openMenu === menu.id ? 'active' : ''}`}
-                onClick={() => setOpenMenu(openMenu === menu.id ? null : menu.id)}
+                aria-haspopup="menu" aria-expanded={openMenu === menu.id}
+                onClick={() => { setSubmenu(null); setOpenMenu(openMenu === menu.id ? null : menu.id); }}
+                onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setSubmenu(null); setOpenMenu(menu.id); requestAnimationFrame(() => menuBarRef.current?.querySelector<HTMLButtonElement>('.ai-menubar-dropdown [role="menuitem"]:not(:disabled)')?.focus()); } }}
                 onMouseEnter={() => {
-                  if (openMenu !== null) setOpenMenu(menu.id);
+                  if (openMenu !== null && openMenu !== menu.id) { setSubmenu(null); setOpenMenu(menu.id); }
                 }}
               >
                 {language === 'id' ? menu.labelId : menu.label}
               </button>
 
               {openMenu === menu.id && (
-                <div className="ai-dropdown-menu">
-                  {menu.items.map((item, idx) =>
-                    'divider' in item ? (
-                      <div key={`div-${idx}`} className="ai-dropdown-divider" />
-                    ) : (
-                      <button
-                        key={item.label}
-                        type="button"
-                        className="ai-dropdown-item"
-                        disabled={item.disabled}
-                        onClick={item.onClick}
-                      >
-                        {item.checked && (
-                          <span
-                            style={{
-                              position: 'absolute',
-                              left: 7,
-                              fontWeight: 700,
-                            }}
-                          >
-                            ✓
-                          </span>
-                        )}
-                        <span>{item.label}</span>
-                        {item.shortcut && (
-                          <span className="ai-shortcut">{item.shortcut}</span>
-                        )}
-                      </button>
-                    )
+                <div className="ai-dropdown-menu ai-menubar-dropdown" role="menu" aria-label={`${menu.label} menu`} onScroll={() => setSubmenu(null)} onKeyDown={event => {
+                  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+                  event.preventDefault();
+                  const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+                  const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                  buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+                }}>
+                  {nestMenuItems(menu.items).map((item, idx) =>
+                    'divider' in item ? <div key={`div-${idx}`} className="ai-dropdown-divider" role="separator" /> :
+                    'children' in item ? <button key={item.label} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={submenu?.label === item.label}
+                      className="ai-dropdown-item" onMouseEnter={e => setSubmenu({ label: item.label, items: item.children, anchor: e.currentTarget })}
+                      onClick={e => setSubmenu({ label: item.label, items: item.children, anchor: e.currentTarget })}
+                      onKeyDown={e => { if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSubmenu({ label: item.label, items: item.children, anchor: e.currentTarget }); requestAnimationFrame(() => submenuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()); } }}>
+                      <span className="ai-dropdown-label">{item.label}</span><span aria-hidden="true">▸</span>
+                    </button> : <button key={item.label} type="button" role="menuitem" className="ai-dropdown-item" disabled={item.disabled}
+                      onMouseEnter={() => setSubmenu(null)} onClick={item.onClick}>
+                      {item.checked && <span className="ai-menu-check">✓</span>}
+                      <span className="ai-dropdown-label" title={item.label}>{item.label}</span>
+                      {item.shortcut && <span className="ai-shortcut">{item.shortcut}</span>}
+                    </button>
                   )}
                 </div>
               )}
@@ -1141,6 +1207,22 @@ export const TopMenuBar: React.FC = () => {
           </select>
         </div>
       </header>
+
+      {submenu && createPortal(<div ref={submenuRef} className="ai-dropdown-menu ai-submenu" role="menu" aria-label={`${submenu.label} submenu`}
+        onKeyDown={event => {
+          if (event.key === 'ArrowLeft') { event.preventDefault(); submenu.anchor.focus(); setSubmenu(null); }
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+            const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+            buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+          }
+        }}>
+        {submenu.items.map(item => <button key={item.label} type="button" role="menuitem" className="ai-dropdown-item" disabled={item.disabled} onClick={item.onClick}>
+          {item.checked && <span className="ai-menu-check">✓</span>}
+          <span className="ai-dropdown-label" title={item.label}>{item.label}</span>{item.shortcut && <span className="ai-shortcut">{item.shortcut}</span>}
+        </button>)}
+      </div>, document.body)}
 
       {/* Row 2: Document Tabs Bar + Isolation Mode Breadcrumb */}
       <div className="ai-doctabs-bar" role="tablist" aria-label="Open documents">
