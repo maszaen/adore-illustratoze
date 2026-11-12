@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { Cable, X } from 'lucide-react';
 import { activeDocument, commitChange, inspectActive, prepareChange, previewActive, type BridgeRequest } from './liveBridge';
 
@@ -10,6 +10,16 @@ export function AgentBridge() {
   const [error, setError] = useState('');
   const [pending, setPending] = useState<{request:BridgeRequest;svg:string;documentName:string}|null>(null);
   const [busy, setBusy] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const panelId = useId();
+  const connectAbort = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; connectAbort.current?.abort(); connectAbort.current = null; };
+  }, []);
+  const closePanel = () => { setOpen(false); triggerRef.current?.focus(); };
   const connected = useRef(false);
   const activePending = useRef<BridgeRequest | null>(null);
   const call = async (c:{url:string;token:string}, path:string, options:RequestInit = {}) => {
@@ -23,6 +33,7 @@ export function AgentBridge() {
     connected.current=false; setConnection(null); setToken(''); setPending(null); activePending.current=null;
   };
   const connect = async () => {
+    if (connecting || connectAbort.current) return;
     setError('');
     try {
       const parsed = new URL(url.trim());
@@ -30,8 +41,23 @@ export function AgentBridge() {
       if (!/^[0-9a-f]{64}$/.test(token.trim())) throw new Error('Pairing token must be 64 lowercase hexadecimal characters.');
       activeDocument();
       const c = { url:parsed.origin, token:token.trim() };
-      await call(c,'/status'); connected.current=true; setConnection(c); setToken('');
-    } catch(e) { setError(e instanceof Error ? e.message : 'Connection failed.'); }
+      const controller = new AbortController();
+      connectAbort.current = controller;
+      setConnecting(true);
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        await call(c, '/status', { signal: controller.signal });
+        if (controller.signal.aborted) throw new Error('Connection timed out.');
+        connected.current = true; setConnection(c); setToken('');
+      } catch (e) {
+        if (controller.signal.aborted) throw new Error('Connection timed out. Check that the bridge is running on this computer.');
+        if (e instanceof TypeError) throw new Error('Could not reach the bridge. Check its URL, browser origin, and that it is running on this computer.');
+        throw e;
+      } finally {
+        clearTimeout(timeout);
+        if (connectAbort.current === controller) { connectAbort.current = null; setConnecting(false); }
+      }
+    } catch(e) { if (mounted.current) setError(e instanceof Error ? e.message : 'Connection failed.'); }
   };
   useEffect(() => {
     if (!connection) return;
@@ -82,16 +108,29 @@ export function AgentBridge() {
     } finally { activePending.current=null; setPending(null); setBusy(false); }
   };
   return <>
-    <button type="button" className="ai-agent-trigger" onClick={() => setOpen(v=>!v)} aria-expanded={open} title="Connect an external agent"><Cable size={13} aria-hidden="true" /> Agent{connection ? ' •' : ''}</button>
-    {open && <section className="ai-agent-popover" aria-label="External agent connection">
-      <header><strong>External agent</strong><button type="button" onClick={() => setOpen(false)} aria-label="Close agent panel"><X size={16} /></button></header>
+    <button ref={triggerRef} type="button" className="ai-agent-trigger" onClick={() => setOpen(v=>!v)} aria-expanded={open} aria-controls={open ? panelId : undefined} title="Connect an external agent"><Cable size={13} aria-hidden="true" /> Agent{connection ? ' •' : ''}</button>
+    {open && <section id={panelId} className="ai-agent-popover" aria-label="External agent connection" onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); closePanel(); } }}>
+      <header><div><strong>External agent</strong><span className={`ai-agent-badge ${connection ? 'is-connected' : ''}`}>{connection ? 'Connected' : 'Not connected'}</span></div><button type="button" onClick={closePanel} aria-label="Close agent panel"><X size={16} /></button></header>
       {!connection ? <>
         <p>Connect only an agent you trust. While connected it can read the active document and request a preview. Edits need your approval.</p>
-        <label>Local bridge URL<input value={url} onChange={e=>setUrl(e.target.value)} placeholder="http://127.0.0.1:port" /></label>
-        <label>Pairing token<input type="password" autoComplete="off" value={token} onChange={e=>setToken(e.target.value)} placeholder="Token from your agent" /></label>
-        <button type="button" className="ai-btn" onClick={()=>void connect()}>Connect</button>
+        <details className="ai-agent-help">
+          <summary>Where do I get the URL and token?</summary>
+          <p>This page’s origin is <code>{window.location.origin}</code>. It identifies where you opened Adore, not an agent or a connection address. If you host Adore elsewhere, it will show that site’s origin instead.</p>
+          <ol>
+            <li>On the computer running this browser, ask your trusted local agent to set up Adore MCP with this exact origin.</li>
+            <li>Ask the agent to call <code>adore_connection_info</code>. Paste the local bridge URL and token it returns below. Keep the token private.</li>
+            <li>Connect here with a document open. The browser talks to the local bridge on this computer; a remote agent or hosting server does not share its localhost.</li>
+          </ol>
+          <p>Browser or network security settings may block access to the local bridge, even when Adore is hosted online.</p>
+        </details>
+        <form onSubmit={event => { event.preventDefault(); void connect(); }}>
+          <label>Local bridge URL<input value={url} onChange={e=>setUrl(e.target.value)} placeholder="http://127.0.0.1:port" autoComplete="off" spellCheck={false} disabled={connecting} /></label>
+          <label>Pairing token<input type="password" autoComplete="off" spellCheck={false} value={token} onChange={e=>setToken(e.target.value)} placeholder="Token from your agent" disabled={connecting} /></label>
+          <button type="submit" className="ai-btn ai-agent-connect" disabled={connecting}>{connecting ? 'Connecting…' : 'Connect'}</button>
+        </form>
       </> : <>
-        <p role="status">Connected to local agent. Reads and previews are enabled.</p>
+        <p role="status">Your agent can read the active document and request previews. Changes still require your approval.</p>
+        <p className="ai-agent-connection-address">Bridge: <code>{connection.url}</code></p>
         <button type="button" className="ai-btn" disabled={busy} onClick={disconnect}>Disconnect</button>
       </>}
       {error && <p role="alert" className="ai-agent-error">{error}</p>}

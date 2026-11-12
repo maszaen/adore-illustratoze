@@ -569,7 +569,7 @@ export const useStudioStore = create<StudioStoreState>((set, get) => ({
   pasteboardMatchUI: true,
   language: 'en',
   activeModal: null,
-  statusMessage: 'Ready — Adore Illustratoze Vector Engine Active',
+  statusMessage: '',
   measureInfo: null,
   clipboardNodes: [],
   clipboardOrigin: { x: 0, y: 0 },

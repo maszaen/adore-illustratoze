@@ -18,7 +18,7 @@ Configure your agent's MCP client to start `node` with the absolute path to `scr
 }
 ```
 
-Use the configuration location and restart procedure specific to the agent harness. On a hosted Adore site, use the actual HTTPS origin, not the example. The MCP process binds only to `127.0.0.1` on an ephemeral port; it writes protocol messages to stdout and never stores the token.
+Use the configuration location and restart procedure specific to the agent harness. The origin identifies the site open in the browser; it is not the agent or bridge URL. For example, if Adore is hosted at `https://app.myapp.com/editor`, set `ADORE_ALLOWED_ORIGIN` to `https://app.myapp.com`. The agent and MCP process still run on the browser user’s computer, not on the hosting server. The MCP process binds only to `127.0.0.1` on an ephemeral port; it writes protocol messages to stdout and never stores the token.
 
 1. Agent calls `adore_connection_info`. Pass the resulting local URL and secret token **privately to the user**, never to external services or public logs. The token authorizes the connection; treat it like a password.
 2. User opens a document in Adore, clicks **Agent** in the bottom status bar, pastes URL/token and connects. Connecting grants this agent read access to the active document summary, selection and SVG preview while connected.
